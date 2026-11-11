@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+  protobufjs: false
+
+overrides:
+  lodash: 4.18.1

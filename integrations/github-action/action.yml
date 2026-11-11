@@ -1,0 +1,97 @@
+name: RollbackIQ Migration Scan
+description: Scan changed PostgreSQL migrations against a Git baseline and apply a RollbackIQ policy.
+inputs:
+  repo:
+    description: Path to a separate checkout containing the baseline and candidate commits.
+    required: true
+  base:
+    description: Baseline Git commit SHA.
+    required: true
+  head:
+    description: Candidate Git commit SHA.
+    required: true
+  analysis-mode:
+    description: Select migrations or compatibility analysis.
+    default: migrations
+  previous:
+    description: Previous application release ref. Compatibility mode defaults to base.
+    required: false
+  source-directories:
+    description: Comma-separated repository-relative source directories for compatibility analysis.
+    default: src
+  prisma-schema:
+    description: Optional tracked Prisma schema location.
+    required: false
+  schema-baseline:
+    description: Optional CREATE TABLE baseline path from the previous release.
+    required: false
+  default-schema:
+    description: Schema used to resolve unqualified database objects.
+    default: public
+  migration-directory:
+    description: Repository-relative directory containing migrations.
+    default: .
+  fail-on:
+    description: Minimum blocking severity or none.
+    default: high
+  fail-incomplete:
+    description: Block when migrations are skipped or coverage is incomplete.
+    default: "true"
+  output-directory:
+    description: Directory for JSON and SARIF reports.
+    default: rollbackiq-output
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      with:
+        node-version: "22"
+        package-manager-cache: false
+    - name: Install scanner dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      run: |
+        npm install --global pnpm@11.25.0 --ignore-scripts
+        pnpm install --frozen-lockfile --filter rollbackiq --filter @rollbackiq/cli...
+    - name: Scan PostgreSQL migrations
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      env:
+        SCAN_REPO: ${{ inputs.repo }}
+        SCAN_BASE: ${{ inputs.base }}
+        SCAN_HEAD: ${{ inputs.head }}
+        SCAN_PATH: ${{ inputs.migration-directory }}
+        SCAN_THRESHOLD: ${{ inputs.fail-on }}
+        SCAN_INCOMPLETE: ${{ inputs.fail-incomplete }}
+        SCAN_OUTPUT: ${{ inputs.output-directory }}
+        SCAN_MODE: ${{ inputs.analysis-mode }}
+        SCAN_PREVIOUS: ${{ inputs.previous || inputs.base }}
+        SCAN_SOURCES: ${{ inputs.source-directories }}
+        SCAN_PRISMA: ${{ inputs.prisma-schema }}
+        SCAN_SCHEMA: ${{ inputs.schema-baseline }}
+        SCAN_DEFAULT_SCHEMA: ${{ inputs.default-schema }}
+      run: |
+        options=()
+        case "$SCAN_INCOMPLETE" in
+          true) options+=(--fail-incomplete) ;;
+          false) ;;
+          *) echo 'fail-incomplete must be true or false' >&2; exit 2 ;;
+        esac
+        case "$SCAN_MODE" in
+          migrations)
+            pnpm scan:git --repo "$GITHUB_WORKSPACE/$SCAN_REPO" --base "$SCAN_BASE" \
+              --head "$SCAN_HEAD" --path "$SCAN_PATH" --fail-on "$SCAN_THRESHOLD" \
+              --output-dir "$GITHUB_WORKSPACE/$SCAN_OUTPUT" --github "${options[@]}"
+            ;;
+          compatibility)
+            IFS=',' read -ra source_paths <<< "$SCAN_SOURCES"
+            for source_path in "${source_paths[@]}"; do options+=(--sources "$source_path"); done
+            if [ -n "$SCAN_PRISMA" ]; then options+=(--prisma "$SCAN_PRISMA"); fi
+            if [ -n "$SCAN_SCHEMA" ]; then options+=(--schema "$SCAN_SCHEMA"); fi
+            pnpm compatibility --repo "$GITHUB_WORKSPACE/$SCAN_REPO" --previous "$SCAN_PREVIOUS" \
+              --proposed "$SCAN_HEAD" --migrations "$SCAN_PATH" --default-schema "$SCAN_DEFAULT_SCHEMA" \
+              --fail-on "$SCAN_THRESHOLD" --output-dir "$GITHUB_WORKSPACE/$SCAN_OUTPUT" \
+              --github "${options[@]}"
+            ;;
+          *) echo 'analysis-mode must be migrations or compatibility' >&2; exit 2 ;;
+        esac

@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": { "includes": ["**", "!**/.next", "!**/next-env.d.ts"] },
+  "formatter": { "indentStyle": "space", "lineWidth": 100 },
+  "linter": { "rules": { "preset": "recommended", "style": { "noDescendingSpecificity": "off" } } },
+  "css": { "parser": { "tailwindDirectives": true } }
+}

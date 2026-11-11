@@ -1,0 +1,19 @@
+{
+  "name": "@rollbackiq/scanner-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./compatibility": "./src/compatibility/index.ts",
+    "./compatibility/contracts": "./src/compatibility/contracts.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@mrleebo/prisma-ast": "0.13.0",
+    "libpg-query": "18.2.2",
+    "typescript": "5.9.3"
+  }
+}
