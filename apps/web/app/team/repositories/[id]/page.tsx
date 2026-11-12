@@ -220,6 +220,20 @@ export default async function RepositoryPage({
       )}
       {report?.success && selected?.data && (
         <>
+          <nav className="inline-form" aria-label="Export saved report">
+            <a
+              className="button secondary compact"
+              href={`/api/scans/${selected.data.id}?format=json`}
+            >
+              Download JSON
+            </a>
+            <a
+              className="button secondary compact"
+              href={`/api/scans/${selected.data.id}?format=sarif`}
+            >
+              Download SARIF
+            </a>
+          </nav>
           <CompatibilityPanel
             report={report.data}
             imported={!selectedJob?.data}

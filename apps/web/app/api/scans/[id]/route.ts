@@ -1,9 +1,10 @@
 import { apiJson } from "@/lib/bounded-json";
+import { scanResponse } from "@/lib/scan-export";
 import { supabaseSettings } from "@/lib/supabase/config";
 import { idSchema } from "@/lib/supabase/scans";
 import { supabaseIdentity } from "@/lib/supabase/server";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   if (!supabaseSettings()) return apiJson({ error: "Supabase is unconfigured." }, 503);
   const identity = await supabaseIdentity();
   if (!identity) return apiJson({ error: "Sign in to open reports." }, 401);
@@ -15,5 +16,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     .eq("id", id.data)
     .maybeSingle();
   if (error) return apiJson({ error: "Scan storage is temporarily unavailable." }, 503);
-  return data ? apiJson(data) : apiJson({ error: "Scan unavailable." }, 404);
+  return data
+    ? scanResponse(data, new URL(request.url).searchParams.get("format"))
+    : apiJson({ error: "Scan unavailable." }, 404);
 }

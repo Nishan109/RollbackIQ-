@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const imageRelease = process.argv[2];
@@ -38,6 +41,7 @@ const { privateKey } = generateKeyPairSync("rsa", {
   publicKeyEncoding: { type: "pkcs1", format: "pem" },
 });
 let queueAvailable = true;
+let queueTimesOut = false;
 let claims = 0;
 const queue = createServer(async (request, response) => {
   const reply = (status, data) => {
@@ -53,6 +57,7 @@ const queue = createServer(async (request, response) => {
   let raw = "";
   for await (const chunk of request) raw += chunk;
   const action = JSON.parse(raw).p_action;
+  if (queueTimesOut) return;
   if (!queueAvailable) return reply(503, { message: "Disposable queue unavailable" });
   if (action === "health") return reply(200, { protocol: 2 });
   if (action === "claim") {
@@ -62,7 +67,19 @@ const queue = createServer(async (request, response) => {
   return reply(400, {});
 });
 const queueOrigin = `http://127.0.0.1:${await listen(queue)}`;
-const worker = spawn(process.execPath, ["--import", "tsx", "scripts/github-worker.ts"], {
+const windows = process.platform === "win32";
+const controlDirectory = await mkdtemp(join(tmpdir(), "rollbackiq-worker-control-"));
+const controlModule = new URL("../../../tools/worker-runtime.mjs", import.meta.url).href;
+const workerArgs = windows
+  ? [
+      "--input-type=module",
+      "--eval",
+      `const { installWorkerControl } = await import(${JSON.stringify(controlModule)});
+      installWorkerControl(process.env.WORKER_FIXTURE_CONTROL, ${JSON.stringify(release)}, ${healthPort});
+      await import("./scripts/github-worker.ts");`,
+    ]
+  : ["scripts/github-worker.ts"];
+const worker = spawn(process.execPath, ["--import", "tsx", ...workerArgs], {
   env: {
     Path: process.env.Path,
     SystemRoot: process.env.SystemRoot,
@@ -80,6 +97,7 @@ const worker = spawn(process.execPath, ["--import", "tsx", "scripts/github-worke
     ROLLBACKIQ_RELEASE: release,
     WORKER_HEALTH_HOST: "127.0.0.1",
     WORKER_HEALTH_PORT: String(healthPort),
+    WORKER_FIXTURE_CONTROL: controlDirectory,
   },
   stdio: ["ignore", "inherit", "inherit"],
   windowsHide: true,
@@ -110,16 +128,27 @@ try {
   await live.body?.cancel();
   queueAvailable = true;
   assert.deepEqual(await waitForReadiness(200), { status: "ok", release, protocol: 2 });
+  queueTimesOut = true;
+  await waitForReadiness(503);
+  queueTimesOut = false;
+  assert.deepEqual(await waitForReadiness(200), { status: "ok", release, protocol: 2 });
   assert.ok(claims > 0, "Worker did not poll the disposable queue");
 } finally {
-  worker.kill("SIGTERM");
+  if (windows) {
+    const control = JSON.parse(
+      await readFile(join(controlDirectory, "worker-control.json"), "utf8"),
+    );
+    await writeFile(join(controlDirectory, control.stopFile), "drain");
+  }
+  if (!windows) worker.kill("SIGTERM");
   const result = await Promise.race([exited, delay(8000, null, { ref: false })]);
   if (!result) {
     worker.kill("SIGKILL");
     await exited;
   }
   await close(queue);
+  await rm(controlDirectory, { recursive: true, force: true });
   assert.ok(result, "Worker did not stop within eight seconds");
-  if (process.platform !== "win32") assert.deepEqual(result, [0, null]);
+  assert.deepEqual(result, [0, null]);
 }
-console.info("Worker startup, readiness, liveness, queue recovery and exit verified.");
+console.info("Worker startup, readiness, liveness, queue recovery and graceful exit verified.");
