@@ -1,21 +1,39 @@
 import { createPrivateKey, sign } from "node:crypto";
 import { z } from "zod";
-import { githubSettings } from "./config";
+import { type githubAppSettings, githubSettings } from "./config";
 import { choices, githubId, installation, repository } from "./contracts";
 import { boundedBytes } from "./security";
 
 export class GithubError extends Error {
-  constructor(readonly status: number) {
+  readonly rateLimited: boolean;
+  readonly retryAfter: number;
+  constructor(
+    readonly status: number,
+    headers = new Headers(),
+  ) {
     super(`GitHub request failed (${status}). Reauthorize or try again later.`);
+    this.rateLimited =
+      status === 429 ||
+      (status === 403 &&
+        (headers.get("x-ratelimit-remaining") === "0" || headers.has("retry-after")));
+    const retryAfter = Number(headers.get("retry-after")) || 0;
+    const reset = Number(headers.get("x-ratelimit-reset")) - Date.now() / 1000;
+    this.retryAfter = this.rateLimited
+      ? Math.min(3600, Math.ceil(Math.max(0, retryAfter, reset)))
+      : 0;
   }
 }
+
+type ProviderSettings = NonNullable<ReturnType<typeof githubAppSettings>> & {
+  clientSecret?: string;
+};
 export class Github {
   readonly settings;
   constructor(
     readonly fetcher: typeof fetch = fetch,
     readonly signal?: AbortSignal,
+    settings: ProviderSettings | null = githubSettings(),
   ) {
-    const settings = githubSettings();
     if (!settings) throw new Error("GitHub App is not configured");
     this.settings = settings;
   }
@@ -32,6 +50,7 @@ export class Github {
   }
   async request(path: string, token: string, method = "GET", body?: unknown) {
     if (!path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid GitHub API path");
+    this.signal?.throwIfAborted();
     const response = await this.fetcher(`https://api.github.com${path}`, {
       method,
       redirect: "error",
@@ -46,15 +65,25 @@ export class Github {
         "Content-Type": "application/json",
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+    }).catch(() => {
+      this.signal?.throwIfAborted();
+      throw new GithubError(503);
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new GithubError(response.status);
+      throw new GithubError(response.status, response.headers);
     }
-    const bytes = await boundedBytes(response.body, 12 * 1024 * 1024);
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    try {
+      const bytes = await boundedBytes(response.body, 12 * 1024 * 1024);
+      this.signal?.throwIfAborted();
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    } catch {
+      this.signal?.throwIfAborted();
+      throw new GithubError(502);
+    }
   }
   async exchange(code: string, verifier: string) {
+    if (!this.settings.clientSecret) throw new Error("GitHub OAuth is not configured");
     const response = await this.fetcher("https://github.com/login/oauth/access_token", {
       method: "POST",
       redirect: "error",
@@ -80,7 +109,7 @@ export class Github {
   }
   async installation(id: number) {
     const value = installation.parse(await this.request(`/app/installations/${id}`, this.jwt()));
-    if (value.app_id !== this.settings.appId || value.suspended_at)
+    if (value.id !== id || value.app_id !== this.settings.appId || value.suspended_at)
       throw new Error("Installation is unavailable");
     return value;
   }

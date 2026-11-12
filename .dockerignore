@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/.next
+**/.env*
+**/*.pem
+**/*.key
+**/*.test.ts
+**/*.tsbuildinfo
+supabase/.temp
+supabase/.branches

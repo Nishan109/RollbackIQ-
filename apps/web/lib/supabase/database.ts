@@ -15,10 +15,20 @@ export interface Database {
         pull_number: number;
         head_sha: string;
         status: string;
+        check_id: number | null;
+        check_state: string | null;
+        check_error: string | null;
+        check_conclusion: string | null;
+        worker_release: string | null;
         attempts: number;
         error: string | null;
         scan_id: string | null;
         created_at: string;
+      }>;
+      github_repositories: Table<{
+        repository_id: string;
+        organization_id: string;
+        full_name: string;
       }>;
       organization_members: Table<{
         organization_id: string;
@@ -54,6 +64,11 @@ export interface Database {
     Views: Record<never, never>;
     Functions: {
       rollbackiq_github_service: Rpc<{ p_action: string; p_data: unknown }, unknown>;
+      rollbackiq_github_worker: Rpc<{ p_action: string; p_data: unknown }, unknown>;
+      rollbackiq_reserve_explanation: Rpc<
+        { p_actor: string; p_user_limit: number; p_total_limit: number },
+        boolean
+      >;
       rollbackiq_create_organization: Rpc<{ p_name: string }>;
       rollbackiq_add_repository: Rpc<{ p_organization_id: string; p_name: string }>;
       rollbackiq_set_member: Rpc<

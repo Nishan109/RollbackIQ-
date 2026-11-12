@@ -19,6 +19,8 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
       "20261111105615_rollbackiq_tenants.sql",
       "20261111105623_github_app.sql",
       "20261111110013_private_storage_hardening.sql",
+      "20261111154108_github_worker_operations.sql",
+      "20261111155003_gemini_daily_budget.sql",
     ])
       await db.exec(
         await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"),
@@ -26,7 +28,7 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
     const privateStorage = await db.query<{ name: string; rls: boolean; user_read: boolean }>(
       `select c.relname name,c.relrowsecurity rls,has_table_privilege('authenticated',c.oid,'SELECT') user_read from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='rollbackiq_private' and c.relkind='r'`,
     );
-    assert.equal(privateStorage.rows.length, 3);
+    assert.equal(privateStorage.rows.length, 4);
     assert.ok(privateStorage.rows.every((table) => table.rls && !table.user_read));
     const createOrg = async (user: string) =>
       db.transaction(async (tx) => {
@@ -43,16 +45,40 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
       "insert into public.organization_members(organization_id,user_id,role) values($1,$2,'viewer')",
       [a, viewer],
     );
-    const rpc = async (action: string, data: Record<string, unknown>) =>
+    const rpc = async (action: string, data: Record<string, unknown>, worker = false) =>
       db.transaction(async (tx) => {
         await tx.exec("set local role service_role");
         return (
           await tx.query<{ result: unknown }>(
-            "select public.rollbackiq_github_service($1,$2::jsonb) result",
+            worker
+              ? "select public.rollbackiq_github_worker($1,$2::jsonb) result"
+              : "select public.rollbackiq_github_service($1,$2::jsonb) result",
             [action, JSON.stringify(data)],
           )
         ).rows[0]?.result;
       });
+    const worker = (action: string, data: Record<string, unknown> = {}) => rpc(action, data, true);
+    assert.deepEqual(await worker("health"), { protocol: 2 });
+    const reserve = async (actor: string) =>
+      db.transaction(async (tx) => {
+        await tx.exec("set local role service_role");
+        const result = await tx.query<{ ok: boolean }>(
+          "select public.rollbackiq_reserve_explanation($1,1,2) as ok",
+          [actor],
+        );
+        return result.rows[0]?.ok;
+      });
+    assert.equal(await reserve(owner), true);
+    assert.equal(await reserve(owner), false);
+    assert.equal(await reserve(other), true);
+    assert.equal(await reserve(viewer), false);
+    await assert.rejects(
+      db.transaction(async (tx) => {
+        await tx.exec("set local role authenticated");
+        await tx.query("select public.rollbackiq_reserve_explanation($1,1,2)", [owner]);
+      }),
+      /permission denied/,
+    );
     const common = { actor: owner, organization: a };
     const hash = "a".repeat(64);
     await assert.rejects(
@@ -206,30 +232,108 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
       payload: { ...event.payload, pull_request: { number: 1, head: { sha: "c".repeat(40) } } },
     };
     await rpc("webhook", event2);
-    const leased = (await rpc("claim", {})) as { id: string; lease_token: string };
+    const leased = (await worker("claim", { release: "a".repeat(40) })) as {
+      id: string;
+      lease_token: string;
+      check_state: string;
+      worker_release: string;
+    };
     assert.ok(leased.id);
+    assert.equal(leased.check_state, "pending");
+    assert.equal(leased.worker_release, "a".repeat(40));
+    const activeLease = { job: leased.id, lease: leased.lease_token };
+    const priorLease = await db.query<{ lease_until: Date }>(
+      "select lease_until from public.github_jobs where id=$1",
+      [leased.id],
+    );
+    await db.exec(
+      "update public.github_jobs set lease_until=now()+interval '10 seconds' where status='running'",
+    );
+    await worker("renew", activeLease);
+    const renewedLease = await db.query<{ lease_until: Date }>(
+      "select lease_until from public.github_jobs where id=$1",
+      [leased.id],
+    );
+    assert.ok(+(renewedLease.rows[0]?.lease_until ?? 0) >= +(priorLease.rows[0]?.lease_until ?? 0));
     await db.exec(
       "update public.github_jobs set lease_until=now()-interval '1 minute' where status='running'",
     );
-    const recovered = (await rpc("claim", {})) as {
+    const recovered = (await worker("claim")) as {
       id: string;
       lease_token: string;
       attempts: number;
     };
     assert.equal(recovered.attempts, 2);
     await assert.rejects(rpc("finish", { job: leased.id, lease: leased.lease_token }), /lease/);
-    await rpc("fail", { job: recovered.id, lease: recovered.lease_token, error: "outage" });
+    await assert.rejects(worker("renew", activeLease), /lease/);
+    await worker("fail", {
+      job: recovered.id,
+      lease: recovered.lease_token,
+      error: "outage",
+      retryAfter: 90,
+      reason: "rate_limited",
+    });
+    const delay = await db.query<{ seconds: number }>(
+      "select extract(epoch from (available_at-now()))::int as seconds from public.github_jobs where id=$1",
+      [recovered.id],
+    );
+    assert.ok((delay.rows[0]?.seconds ?? 0) >= 89);
     await db.exec(
       "update public.github_jobs set available_at=now()-interval '1 minute' where status='queued'",
     );
-    const finalAttempt = (await rpc("claim", {})) as {
+    const finalAttempt = (await worker("claim")) as {
       id: string;
       lease_token: string;
       attempts: number;
     };
     assert.equal(finalAttempt.attempts, 3);
-    await rpc("fail", { job: finalAttempt.id, lease: finalAttempt.lease_token, error: "outage" });
-    assert.equal(await rpc("claim", {}), null);
+    await worker("fail", {
+      job: finalAttempt.id,
+      lease: finalAttempt.lease_token,
+      error: "outage",
+    });
+    assert.equal(await worker("claim"), null);
+    assert.equal(
+      (
+        await db.query<{ status: string }>("select status from public.github_jobs where id=$1", [
+          finalAttempt.id,
+        ])
+      ).rows[0]?.status,
+      "failed",
+    );
+
+    await rpc("webhook", {
+      ...event,
+      delivery: "00000000-0000-4000-8000-000000000025",
+      payload: { ...event.payload, pull_request: { number: 2, head: { sha: "b".repeat(40) } } },
+    });
+    const checkJob = (await worker("claim")) as { id: string; lease_token: string };
+    const checkLease = { job: checkJob.id, lease: checkJob.lease_token };
+    const secondScan = (await worker("save", { ...checkLease, report })) as { scan: string };
+    await worker("checkpoint", { ...checkLease, state: "in_progress", check: 90 });
+    await worker("fail", {
+      ...checkLease,
+      retry: false,
+      state: "blocked",
+      reason: "permission_missing",
+    });
+    assert.deepEqual(
+      (
+        await db.query(
+          "select status,scan_id,check_state,check_error,error from public.github_jobs where id=$1",
+          [checkJob.id],
+        )
+      ).rows,
+      [
+        {
+          status: "completed",
+          scan_id: secondScan.scan,
+          check_state: "blocked",
+          check_error: "permission_missing",
+          error: null,
+        },
+      ],
+    );
     await rpc("webhook", {
       delivery: "00000000-0000-4000-8000-000000000022",
       event: "installation",
@@ -263,17 +367,25 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
     assert.equal(
       (await db.query<{ count: number }>("select count(*)::int count from public.scans")).rows[0]
         ?.count,
-      1,
+      2,
     );
     await db.transaction(async (tx) => {
       await tx.exec("set local role authenticated");
       await tx.query("select set_config('request.jwt.claim.sub',$1,true)", [other]);
       assert.equal((await tx.query("select * from public.github_connections")).rows.length, 0);
+      assert.equal((await tx.query("select check_state from public.github_jobs")).rows.length, 0);
     });
     await assert.rejects(
       db.transaction(async (tx) => {
         await tx.exec("set local role authenticated");
         await tx.query("select public.rollbackiq_github_service('claim','{}')");
+      }),
+      /permission denied/,
+    );
+    await assert.rejects(
+      db.transaction(async (tx) => {
+        await tx.exec("set local role authenticated");
+        await tx.query("select public.rollbackiq_github_worker('health','{}')");
       }),
       /permission denied/,
     );

@@ -1,3 +1,10 @@
+import {
+  isMigrationPath,
+  MAX_FILE_BYTES,
+  MAX_FILES,
+  MAX_TOTAL_BYTES,
+} from "@rollbackiq/scanner-core";
+import { isTypescriptConfig } from "@rollbackiq/scanner-core/compatibility";
 import type {
   ChangedFile,
   CompatibilityInput,
@@ -5,12 +12,6 @@ import type {
   ReleaseSide,
   Snapshot,
 } from "@rollbackiq/scanner-core/compatibility/contracts";
-import {
-  isMigrationPath,
-  MAX_FILE_BYTES,
-  MAX_FILES,
-  MAX_TOTAL_BYTES,
-} from "@rollbackiq/scanner-core";
 import { type GitReader, gitOid, gitReader, resolveGitCommit, utf8 } from "./git-read";
 
 const MAX_SOURCE_FILES = 400;
@@ -317,7 +318,18 @@ export async function readCompatibilityInput(
         location: atFile(prisma),
         message: "The configured Prisma schema is missing from this release.",
       });
-    return { release: { ref: options[side], commit }, sources, prisma: prismaFile };
+    const typescriptConfigs = await readBlobs(
+      git,
+      [...tree.values()].filter(({ path }) => isTypescriptConfig(path)).sort(orderPath),
+      { count: 32, file: MAX_FILE_BYTES, total: 1024 * 1024 },
+      onSkip,
+    );
+    return {
+      release: { ref: options[side], commit },
+      sources,
+      prisma: prismaFile,
+      typescriptConfigs,
+    };
   }
 
   const baselineEntry = options.baseline ? previousTree.get(options.baseline) : undefined;

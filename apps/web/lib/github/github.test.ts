@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { createHmac, generateKeyPairSync, verify } from "node:crypto";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { analyzeCompatibility } from "@rollbackiq/scanner-core/compatibility";
 import { beginAuthorization, consumeAuthorization } from "./authorization";
+import { checkOutput, recoverCheck } from "./checks";
 import { githubReady, githubSettings } from "./config";
-import { scanConfiguration } from "./contracts";
+import { jobSchema, scanConfiguration } from "./contracts";
 import { Github } from "./provider";
 import { githubCallback, githubPost, githubSetup } from "./routes";
 import { boundedBytes, pkceChallenge, validSignature } from "./security";
+import { githubSnapshot } from "./snapshot";
 import { receiveWebhook } from "./webhook";
 import { runGithubJob } from "./worker";
 
@@ -16,6 +20,77 @@ const repositoryId = "00000000-0000-4000-8000-000000000003";
 const jobId = "00000000-0000-4000-8000-000000000004";
 const previous = "a".repeat(40),
   head = "b".repeat(40);
+
+test("GitHub snapshots resolve shared clients using each revision's committed module configuration", async () => {
+  const env = environment();
+  try {
+    const oldTree = "c".repeat(40),
+      newTree = "d".repeat(40);
+    const blobs = new Map<string, string>();
+    function entry(path: string, text: string) {
+      const sha = (blobs.size + 10).toString(16).padStart(40, "0");
+      blobs.set(sha, text);
+      return { path, sha, type: "blob", mode: "100644", size: Buffer.byteLength(text) };
+    }
+    const helper =
+      'import {createServerClient} from "@supabase/ssr";export async function connect(){return createServerClient(url,key);}';
+    const config = (target: string) =>
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/client": [target] } } });
+    const oldEntries = [
+      entry("tsconfig.json", config("src/old-client.ts")),
+      entry("src/old-client.ts", helper),
+      entry(
+        "src/main.ts",
+        'import {connect} from "@/client";const client=await connect();client.from("users").select("legacy_tier");',
+      ),
+    ];
+    const newEntries = [
+      entry("tsconfig.json", config("src/new-client.ts")),
+      entry("src/new-client.ts", helper),
+      entry(
+        "src/main.ts",
+        'import {connect} from "@/client";const client=await connect();client.from("users").select("id");',
+      ),
+      entry("migrations/002.sql", "ALTER TABLE public.users DROP COLUMN legacy_tier;"),
+    ];
+    const provider = new Github(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith(`/commits/${previous}`))
+        return Response.json({ sha: previous, commit: { tree: { sha: oldTree } } });
+      if (path.endsWith(`/commits/${head}`))
+        return Response.json({ sha: head, commit: { tree: { sha: newTree } } });
+      if (path.endsWith(`/git/trees/${oldTree}`))
+        return Response.json({ truncated: false, tree: oldEntries });
+      if (path.endsWith(`/git/trees/${newTree}`))
+        return Response.json({ truncated: false, tree: newEntries });
+      if (path.includes("/compare/")) return Response.json({ status: "ahead" });
+      const blob = blobs.get(path.split("/").at(-1) ?? "");
+      if (blob !== undefined)
+        return Response.json({
+          encoding: "base64",
+          content: Buffer.from(blob).toString("base64"),
+          size: Buffer.byteLength(blob),
+        });
+      throw new Error("Unexpected snapshot request");
+    });
+    const snapshot = await githubSnapshot(
+      provider,
+      "test-token",
+      "org/repo",
+      head,
+      scanConfiguration.parse({ migrations: "migrations", sources: ["src"], previous }),
+    );
+    const report = await analyzeCompatibility(snapshot);
+    assert.equal(snapshot.previous.typescriptConfigs?.length, 1);
+    assert.equal(snapshot.proposed.typescriptConfigs?.length, 1);
+    assert.equal(report.dependencies.previous.queries, 1);
+    assert.equal(report.dependencies.proposed.queries, 1);
+    assert.equal(report.coverage.gaps.length, 0);
+    assert.equal(report.status, "incompatible");
+  } finally {
+    env.restore();
+  }
+});
 function environment() {
   const original = { ...process.env };
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -268,13 +343,23 @@ test("GitHub worker scans committed blobs, persists evidence and publishes a com
       attempts: 1,
       scan_id: null,
     };
-    const provider = () =>
+    let override:
+      | ((path: string, method: string, body: unknown) => Response | Promise<Response> | undefined)
+      | undefined;
+    const provider = (signal?: AbortSignal) =>
       new Github(async (input, init) => {
         const path = new URL(String(input)).pathname;
         const body = init?.body ? JSON.parse(String(init.body)) : undefined;
         calls.push({ path, method: init?.method ?? "GET", body });
+        const response = override?.(path, init?.method ?? "GET", body);
+        if (response) return response;
         if (path === "/app/installations/42")
-          return Response.json({ id: 42, app_id: 1, account: { id: 200, login: "org" } });
+          return Response.json({
+            id: 42,
+            app_id: 1,
+            account: { id: 200, login: "org" },
+            permissions: { checks: "write" },
+          });
         if (path.endsWith("/access_tokens"))
           return Response.json({
             token: "installation-token",
@@ -283,9 +368,17 @@ test("GitHub worker scans committed blobs, persists evidence and publishes a com
         if (path === "/repos/org/repo") return Response.json({ id: 10, full_name: "org/repo" });
         if (path.endsWith("/pulls/1"))
           return Response.json({ state: "open", head: { sha: head }, base: { repo: { id: 10 } } });
-        if (path.endsWith(`/commits/${head}/check-runs`)) return Response.json({ check_runs: [] });
+        if (path.endsWith(`/commits/${head}/check-runs`))
+          return Response.json({ total_count: 0, check_runs: [] });
         if (path.endsWith("/check-runs")) return Response.json({ id: 900 });
-        if (path.endsWith("/check-runs/900")) return Response.json({ id: 900 });
+        if (path.endsWith("/check-runs/900"))
+          return Response.json({
+            id: 900,
+            app: { id: 1 },
+            head_sha: head,
+            external_id: jobId,
+            status: "in_progress",
+          });
         if (path.endsWith("/commits/v1"))
           return Response.json({ sha: previous, commit: { tree: { sha: treeOld } } });
         if (path.endsWith(`/commits/${head}`))
@@ -324,7 +417,7 @@ test("GitHub worker scans committed blobs, persists evidence and publishes a com
           });
         }
         throw new Error(`Unexpected test request ${path}`);
-      });
+      }, signal);
     const actions: string[] = [];
     const store = async (action: string, data: Record<string, unknown>) => {
       actions.push(action);
@@ -347,8 +440,19 @@ test("GitHub worker scans committed blobs, persists evidence and publishes a com
     assert.ok(report.findings.some((f) => f.ruleId === "COMPAT001"));
     assert.equal(report.previous.commit, previous);
     assert.equal(report.proposed.commit, head);
-    const check = calls.find((c) => c.method === "PATCH")?.body as { conclusion: string };
-    assert.equal(check.conclusion, "action_required");
+    const check = calls.find((c) => c.method === "PATCH")?.body as {
+      conclusion: string;
+      details_url: string;
+      output: { summary: string; annotations: { path: string; start_line: number }[] };
+    };
+    assert.equal(check.conclusion, "failure");
+    assert.match(check.details_url, new RegExp(repositoryId));
+    assert.match(check.output.summary, /Previous-release queries: 1/);
+    assert.equal(check.output.annotations[0]?.path, "migrations/002_drop.sql");
+    assert.equal(check.output.annotations[0]?.start_line, 1);
+    const created = calls.find((c) => c.method === "POST" && c.path.endsWith("/check-runs"));
+    assert.ok(created);
+    assert.equal((created.body as { head_sha: string }).head_sha, head);
     // A superseded PR is cancelled before any repository snapshot or report is read.
     const staleProvider = () => {
       const base = provider();
@@ -392,7 +496,264 @@ test("GitHub worker scans committed blobs, persists evidence and publishes a com
       return {};
     }, provider);
     assert.equal(calls.filter((c) => c.path.includes("/git/blobs/")).length, before);
+
+    const run = async (
+      customJob: Record<string, unknown> = {},
+      options?: Parameters<typeof runGithubJob>[2],
+    ) => {
+      calls.length = 0;
+      const operations: { action: string; data: Record<string, unknown> }[] = [];
+      await runGithubJob(
+        async (action, data) => {
+          operations.push({ action, data });
+          if (action === "claim") return { ...job, ...customJob };
+          if (action === "save") return { scan: repositoryId };
+          if (action === "report") return report;
+          return {};
+        },
+        provider,
+        options,
+      );
+      return operations;
+    };
+    for (const granted of [false, true]) {
+      override = (path) =>
+        path === "/app/installations/42"
+          ? Response.json({
+              id: 42,
+              app_id: 1,
+              account: { id: 200, login: "org" },
+              permissions: {},
+            })
+          : path === "/app"
+            ? Response.json({ permissions: granted ? { checks: "write" } : {} })
+            : undefined;
+      const operations = await run();
+      assert.ok(
+        operations.some(
+          ({ action, data }) =>
+            action === "checkpoint" &&
+            data.state === "blocked" &&
+            data.reason === (granted ? "installation_approval_required" : "permission_missing"),
+        ),
+      );
+      assert.ok(operations.some(({ action }) => action === "save"));
+      assert.equal(operations.at(-1)?.action, "finish");
+      assert.ok(!calls.some((c) => c.path.endsWith("/check-runs")));
+    }
+    const disabled = await run({ configuration: { ...config, publishChecks: false } });
+    assert.ok(
+      disabled.some(({ action, data }) => action === "checkpoint" && data.state === "disabled"),
+    );
+    assert.ok(!calls.some((c) => c.path.endsWith("/check-runs")));
+    let tokenIssued = 0;
+    let repoCalls = 0;
+    override = (path) => {
+      if (path.endsWith("/access_tokens"))
+        return Response.json({
+          token: `test-token-${++tokenIssued}`,
+          expires_at: new Date().toISOString(),
+        });
+      if (path === "/repos/org/repo" && ++repoCalls === 1)
+        return Response.json({}, { status: 401 });
+    };
+    assert.equal((await run()).at(-1)?.action, "finish");
+    assert.equal(tokenIssued, 2);
+    override = (path) =>
+      path === "/repos/org/repo" ? Response.json({}, { status: 404 }) : undefined;
+    assert.equal((await run()).at(-1)?.data.reason, "repository_not_installed");
+    override = (path) =>
+      path === "/repos/org/repo"
+        ? Response.json({}, { status: 403, headers: { "retry-after": "90" } })
+        : undefined;
+    assert.equal((await run()).at(-1)?.data.retryAfter, 90);
+
+    for (const phase of ["POST", "PATCH"]) {
+      override = (path, method) =>
+        path.includes("/check-runs") && method === phase
+          ? Response.json({}, { status: 503 })
+          : undefined;
+      const operations = await run();
+      assert.ok(
+        operations.some(({ action }) => action === "save"),
+        phase,
+      );
+      assert.equal(operations.at(-1)?.data.reason, "provider_unavailable", phase);
+      assert.equal(operations.at(-1)?.data.retry, true, phase);
+      const exhausted = await run({ attempts: 3 });
+      assert.equal(exhausted.at(-1)?.action, "finish", phase);
+      assert.ok(
+        exhausted.some(({ action, data }) => action === "checkpoint" && data.state === "failed"),
+        phase,
+      );
+    }
+    override = (path) =>
+      path.includes("/git/blobs/") ? Response.json({}, { status: 503 }) : undefined;
+    const incomplete = await run();
+    assert.ok(
+      !incomplete.some(({ action }) => action === "save"),
+      "a provider outage cannot become a coverage finding",
+    );
+    assert.equal(incomplete.at(-1)?.data.reason, "provider_unavailable");
+
+    override = (path, method) =>
+      method === "GET" && path.endsWith("/check-runs/900")
+        ? Response.json({
+            id: 900,
+            app: { id: 1 },
+            head_sha: head,
+            external_id: jobId,
+            status: "completed",
+            conclusion: "failure",
+            details_url: check.details_url,
+          })
+        : undefined;
+    assert.equal(
+      (await run({ scan_id: repositoryId, check_id: 900, attempts: 2 })).at(-1)?.action,
+      "finish",
+    );
+    assert.ok(!calls.some((c) => c.method === "PATCH"), "annotations must not append twice");
+    override = (path, method) =>
+      method === "GET" && path.endsWith("/check-runs/900")
+        ? Response.json({
+            id: 900,
+            app: { id: 2 },
+            head_sha: head,
+            external_id: jobId,
+            status: "in_progress",
+          })
+        : undefined;
+    const wrongApp = await run({ scan_id: repositoryId, check_id: 900, attempts: 2 });
+    assert.ok(
+      wrongApp.some(
+        ({ action, data }) => action === "checkpoint" && data.reason === "recovery_incomplete",
+      ),
+    );
+    assert.ok(!calls.some((c) => c.method === "PATCH"));
+
+    override = (path) =>
+      path.includes("/git/blobs/") ? delay(150, Response.json({}, { status: 503 })) : undefined;
+    const timedOut = await run({ attempts: 3 }, { timeoutMs: 100, heartbeatMs: 10 });
+    assert.ok(timedOut.some(({ action }) => action === "renew"));
+    assert.ok(!timedOut.some(({ action }) => action === "save"));
+    assert.equal(timedOut.at(-1)?.data.reason, "timed_out");
+    assert.equal(timedOut.at(-1)?.data.conclusion, "timed_out");
+
+    override = (path) =>
+      path.endsWith("/pulls/1")
+        ? Response.json({
+            state: "closed",
+            head: { sha: head },
+            base: { repo: { id: 10 } },
+          })
+        : undefined;
+    assert.equal((await run({ check_id: 900 })).at(-1)?.data.conclusion, "cancelled");
   } finally {
     env.restore();
   }
+});
+
+test("Check policy treats uncertainty independently and annotations only target candidate migration files", async () => {
+  const job = jobSchema.parse({
+    id: jobId,
+    organization_id: organization,
+    repository_id: repositoryId,
+    installation_id: 42,
+    github_id: 10,
+    full_name: "org/repo",
+    pull_number: 1,
+    head_sha: head,
+    lease_token: jobId,
+    check_id: null,
+    attempts: 1,
+    scan_id: null,
+    configuration: { migrations: "migrations", sources: ["src"], previous: "v1" },
+  });
+  const source = [
+    { path: "src/query.ts", text: 'db.query("SELECT legacy FROM public.customers")' },
+  ];
+  const migration = {
+    path: "migrations/001.sql",
+    sql: "ALTER TABLE public.customers DROP COLUMN legacy;",
+  };
+  const report = await analyzeCompatibility({
+    previous: { release: { ref: previous }, sources: source },
+    proposed: { release: { ref: head }, sources: source },
+    migrations: [migration],
+    migrationChanges: [{ path: migration.path, status: "added" }],
+  });
+  const reportUrl = "https://rollbackiq.example/reports/example";
+  const output = (data: typeof report, config = job.configuration) =>
+    checkOutput(data, { ...job, configuration: config }, reportUrl);
+  assert.equal(output(report).conclusion, "failure");
+  const first = report.findings[0];
+  assert.ok(first);
+  const findings = Array.from({ length: 60 }, (_, index) => ({ ...first, id: String(index) }));
+  assert.equal(output({ ...report, findings }).output.annotations?.length, 50);
+  assert.equal(
+    output({
+      ...report,
+      findings: findings.map((f) => ({
+        ...f,
+        location: { path: "src/query.ts", line: 1, column: 1 },
+      })),
+    }).output.annotations,
+    undefined,
+  );
+  const clean = { ...report, findings: [], migrationReport: null };
+  assert.equal(
+    output({ ...clean, status: "compatible_within_analyzed_scope" }).conclusion,
+    "success",
+  );
+  assert.equal(output({ ...clean, status: "potentially_incompatible" }).conclusion, "neutral");
+  const unknown = { ...clean, status: "unknown" as const };
+  assert.equal(output(unknown).conclusion, "action_required");
+  assert.equal(
+    output(unknown, {
+      ...job.configuration,
+      checkPolicy: { failOn: "none", incomplete: "failure" },
+    }).conclusion,
+    "failure",
+  );
+  assert.equal(
+    output(report, {
+      ...job.configuration,
+      checkPolicy: { failOn: "none", incomplete: "action_required" },
+    }).conclusion,
+    "failure",
+  );
+
+  const prior = {
+    id: 900,
+    app: { id: 1 },
+    head_sha: head,
+    external_id: jobId,
+    status: "in_progress",
+  };
+  const pages: number[] = [];
+  const recovered = await recoverCheck(
+    async (path) => {
+      const page = Number(new URL(path, "https://api.github.com").searchParams.get("page"));
+      pages.push(page);
+      return {
+        total_count: 101,
+        check_runs:
+          page === 2
+            ? [prior]
+            : Array.from({ length: 100 }, (_, i) => ({
+                ...prior,
+                id: i + 1,
+                external_id: "other",
+              })),
+      };
+    },
+    job,
+    1,
+  );
+  assert.deepEqual(pages, [1, 2]);
+  assert.equal(recovered?.id, 900);
+  await assert.rejects(
+    recoverCheck(async () => ({ total_count: 101, check_runs: [] }), job, 1),
+    /identified safely/,
+  );
 });

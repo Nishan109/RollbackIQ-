@@ -6,6 +6,8 @@ coverage/
 next-env.d.ts
 .env*
 !.env.example
+*.pem
+*.key
 rollbackiq-report.json
 rollbackiq-report.sarif
 rollbackiq-output/

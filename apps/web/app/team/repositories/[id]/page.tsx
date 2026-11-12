@@ -4,6 +4,8 @@ import { Brand } from "@/components/brand";
 import { CompatibilityPanel } from "@/components/compatibility-panel";
 import { compatibilityReportSchema } from "@/lib/compatibility-report";
 import { geminiSettings } from "@/lib/gemini";
+import { checkMessages } from "@/lib/github/checks";
+import { fullName } from "@/lib/github/contracts";
 import { idSchema, repositoryFor, scanCursor, scanPage } from "@/lib/supabase/scans";
 import { requireIdentity } from "@/lib/supabase/server";
 import { reviewScan } from "../../actions";
@@ -25,50 +27,60 @@ export default async function RepositoryPage({
   if (!repo) notFound();
   const cursor = scanCursor(search.cursor);
   const selectedId = idSchema.safeParse(search.scan);
-  const [history, membership, selected, review, jobs, selectedJob] = await Promise.all([
-    scanPage(client, repo, cursor),
-    client
-      .from("organization_members")
-      .select("role")
-      .eq("organization_id", repo.organization_id)
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    selectedId.success
-      ? client
-          .from("scans")
-          .select("id,report")
-          .eq("repository_id", repo.id)
-          .eq("id", selectedId.data)
-          .maybeSingle()
-      : null,
-    selectedId.success
-      ? client
-          .from("scan_reviews")
-          .select("decision,reviewed_at")
-          .eq("organization_id", repo.organization_id)
-          .eq("scan_id", selectedId.data)
-          .order("reviewed_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : null,
-    client
-      .from("github_jobs")
-      .select("id,pull_number,head_sha,status,attempts,error,scan_id,created_at")
-      .eq("repository_id", repo.id)
-      .order("created_at", { ascending: false })
-      .limit(20),
-    selectedId.success
-      ? client
-          .from("github_jobs")
-          .select("id")
-          .eq("repository_id", repo.id)
-          .eq("scan_id", selectedId.data)
-          .limit(1)
-          .maybeSingle()
-      : null,
-  ]);
+  const [history, membership, selected, review, jobs, selectedJob, githubRepository] =
+    await Promise.all([
+      scanPage(client, repo, cursor),
+      client
+        .from("organization_members")
+        .select("role")
+        .eq("organization_id", repo.organization_id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      selectedId.success
+        ? client
+            .from("scans")
+            .select("id,report")
+            .eq("repository_id", repo.id)
+            .eq("id", selectedId.data)
+            .maybeSingle()
+        : null,
+      selectedId.success
+        ? client
+            .from("scan_reviews")
+            .select("decision,reviewed_at")
+            .eq("organization_id", repo.organization_id)
+            .eq("scan_id", selectedId.data)
+            .order("reviewed_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : null,
+      client
+        .from("github_jobs")
+        .select(
+          "id,pull_number,head_sha,status,attempts,error,scan_id,created_at,check_id,check_state,check_error,check_conclusion",
+        )
+        .eq("repository_id", repo.id)
+        .order("created_at", { ascending: false })
+        .limit(20),
+      selectedId.success
+        ? client
+            .from("github_jobs")
+            .select("id")
+            .eq("repository_id", repo.id)
+            .eq("scan_id", selectedId.data)
+            .limit(1)
+            .maybeSingle()
+        : null,
+      client
+        .from("github_repositories")
+        .select("full_name")
+        .eq("repository_id", repo.id)
+        .maybeSingle(),
+    ]);
   const canWrite = !!membership.data && membership.data.role !== "viewer";
   const report = selected?.data ? compatibilityReportSchema.safeParse(selected.data.report) : null;
+  const githubName = fullName.safeParse(githubRepository.data?.full_name);
+  const githubUrl = githubName.success ? `https://github.com/${githubName.data}` : null;
   return (
     <main className="container team-layout">
       <header className="team-header">
@@ -81,22 +93,54 @@ export default async function RepositoryPage({
       <Link className="text-link" href={`/team/github?organization=${repo.organization_id}`}>
         GitHub connection and scan settings
       </Link>
-      {!jobs.error && !!jobs.data?.length && (
+      {jobs.error && <p className="form-error">GitHub job status is temporarily unavailable.</p>}
+      {!!jobs.data?.length && (
         <section className="dashboard-card team-card">
           <h2>GitHub scan jobs</h2>
           <p>Refresh this page to see worker progress.</p>
           <ul>
             {jobs.data.map((job) => (
               <li key={job.id}>
-                PR #{job.pull_number} · <code>{job.head_sha.slice(0, 12)}</code> · {job.status} ·
-                Attempt {job.attempts}
+                {githubUrl ? (
+                  <a className="text-link" href={`${githubUrl}/pull/${job.pull_number}`}>
+                    PR #{job.pull_number}
+                  </a>
+                ) : (
+                  <>PR #{job.pull_number}</>
+                )}
+                {" · "}
+                <code title={job.head_sha}>{job.head_sha.slice(0, 12)}</code>
+                {" · "}
+                <strong className="job-status">{job.status}</strong>
+                {" · Attempt "}
+                {job.attempts}
                 {job.error && <p className="form-error">{job.error}</p>}
+                <p>
+                  GitHub Check{" · "}
+                  {(
+                    job.check_state ?? (job.check_id ? "legacy record" : "not recorded")
+                  ).replaceAll("_", " ")}
+                  {job.check_conclusion && ` · ${job.check_conclusion.replaceAll("_", " ")}`}
+                  {githubUrl && job.check_id && (
+                    <>
+                      {" · "}
+                      <a className="text-link" href={`${githubUrl}/runs/${job.check_id}`}>
+                        Open Check
+                      </a>
+                    </>
+                  )}
+                </p>
+                {job.check_error && (
+                  <p className="form-error">
+                    {checkMessages[job.check_error] ?? "Check publication needs review."}
+                  </p>
+                )}
                 {job.scan_id && (
                   <Link
                     className="text-link"
                     href={`/team/repositories/${repo.id}?scan=${job.scan_id}`}
                   >
-                    Open report
+                    Open saved report
                   </Link>
                 )}
               </li>
@@ -210,6 +254,9 @@ export default async function RepositoryPage({
             key={selected.data.id}
             scanId={selected.data.id}
             enabled={!!geminiSettings()}
+            findings={report.data.findings
+              .slice(0, 100)
+              .map(({ id, ruleId, title }) => ({ id, ruleId, title }))}
           />
         </>
       )}

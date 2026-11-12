@@ -1,6 +1,6 @@
 import { MAX_FILE_BYTES, type SchemaChange, type Severity, severities } from "../contracts";
-import { isMigrationPath, scanMigrations } from "../index";
 import { objectName } from "../identifiers";
+import { isMigrationPath, scanMigrations } from "../index";
 import { isBuiltinType } from "../postgres";
 import { obscuresNames, proposedCatalog, readCatalog, tableKey } from "./catalog";
 import type {
@@ -15,8 +15,9 @@ import { changeRule, compatibilityRules, dependenciesFor } from "./rules";
 import { queryParser } from "./sql";
 
 export * from "./contracts";
-export { compatibilityRules } from "./rules";
 export { compatibilitySarif } from "./report";
+export { compatibilityRules } from "./rules";
+export { isTypescriptConfig } from "./source-program";
 
 function validateInput(input: CompatibilityInput) {
   if (input.postgresMajor !== undefined && input.postgresMajor !== 18)
@@ -34,6 +35,12 @@ function validateInput(input: CompatibilityInput) {
   )
     throw new Error("Provide a bounded UTF-8 .sql baseline.");
   for (const snapshot of [input.previous, input.proposed]) {
+    const configs = snapshot.typescriptConfigs ?? [];
+    if (
+      configs.length > 32 ||
+      configs.reduce((bytes, file) => bytes + Buffer.byteLength(file.text), 0) > 1024 * 1024
+    )
+      throw new Error("TypeScript configuration exceeds 32 files or 1 MiB.");
     if (
       !snapshot.release.ref ||
       snapshot.release.ref.length > 256 ||
@@ -47,7 +54,11 @@ function validateInput(input: CompatibilityInput) {
     )
       throw new Error("Source snapshot exceeds 400 files or 6 MiB.");
     const paths = new Set<string>();
-    for (const file of [...snapshot.sources, ...(snapshot.prisma ? [snapshot.prisma] : [])]) {
+    for (const file of [
+      ...snapshot.sources,
+      ...(snapshot.prisma ? [snapshot.prisma] : []),
+      ...configs,
+    ]) {
       if (
         !isMigrationPath(`${file.path}.sql`) ||
         paths.has(file.path) ||

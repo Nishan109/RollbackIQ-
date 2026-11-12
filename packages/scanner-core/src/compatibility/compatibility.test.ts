@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { analyzeCompatibility, compatibilityPolicy, compatibilitySarif } from "./index";
 import type { CompatibilityInput } from "./contracts";
+import { analyzeCompatibility, compatibilityPolicy, compatibilitySarif } from "./index";
 
 const source = (text: string) => [{ path: "src/users.ts", text }];
 function input(
@@ -45,7 +45,8 @@ test("recognizes Supabase table, projection and filter dependencies without conf
   );
   const report = await analyzeCompatibility(scan);
   assert.equal(report.status, "incompatible");
-  assert.equal(report.dependencies.previous.queries, 2);
+  assert.equal(report.dependencies.previous.queries, 3);
+  assert.ok(report.coverage.gaps.some(({ kind }) => kind === "unresolved-reference"));
   assert.ok(
     report.findings[0]?.previousEvidence.some(({ target }) => target.column === "owner_id"),
   );
@@ -66,6 +67,335 @@ test("recognizes Supabase table, projection and filter dependencies without conf
   const nested = await analyzeCompatibility(scan);
   assert.equal(nested.status, "unknown");
   assert.ok(nested.coverage.gaps.some(({ kind }) => kind === "unresolved-reference"));
+});
+
+test("traces async Supabase helpers through configured aliases and relative re-exports", async () => {
+  const sources = [
+    {
+      path: "src/lib/client.ts",
+      text: `import {createServerClient as sdkClient} from "@supabase/ssr";
+      export async function createClient() { const cookies = await getCookies(); return sdkClient(url, key, {cookies}); }`,
+    },
+    { path: "src/lib/index.ts", text: `export {createClient as connect} from "./client";` },
+    {
+      path: "src/reader.ts",
+      text: `import {connect} from "@/lib";
+      const db = await connect(); db.from("audit_reports").select("id,snapshot").eq("owner_id", owner);`,
+    },
+    {
+      path: "src/writer.ts",
+      text: `import {createClient} from "./lib/client";
+      const db = await createClient(); const id = "row"; const snapshot = {}; const row = {id, snapshot};
+      db.from("audit_reports").insert(row);`,
+    },
+    {
+      path: "src/delete.ts",
+      text: 'export async function remove(factory:()=>Promise<unknown>){const client=await factory();client.from("audit_reports").delete().eq("id",id);}',
+    },
+    {
+      path: "src/caller.ts",
+      text: 'import {remove} from "./delete";import {connect} from "@/lib";remove(connect);',
+    },
+  ];
+  const typescriptConfigs = [
+    {
+      path: "tsconfig.base.json",
+      text: JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } } }),
+    },
+    { path: "tsconfig.json", text: JSON.stringify({ extends: "./tsconfig.base.json" }) },
+  ];
+  const scan: CompatibilityInput = {
+    previous: { release: { ref: "v1" }, sources, typescriptConfigs },
+    proposed: { release: { ref: "v2" }, sources, typescriptConfigs },
+    migrations: [
+      { path: "migrations/002.sql", sql: "ALTER TABLE public.audit_reports DROP COLUMN snapshot;" },
+    ],
+  };
+  const report = await analyzeCompatibility(scan);
+  assert.equal(report.status, "incompatible");
+  assert.equal(report.dependencies.previous.queries, 3);
+  assert.equal(report.coverage.gaps.length, 0);
+  assert.ok(
+    report.dependencies.previous.references.some(
+      ({ target, writeTarget }) => target.column === "snapshot" && writeTarget,
+    ),
+  );
+  assert.ok(
+    report.dependencies.previous.references.some(
+      ({ statement, location }) => statement === "delete" && location.path === "src/delete.ts",
+    ),
+  );
+  assert.ok(
+    report.findings[0]?.previousEvidence.some(({ location }) => location.path === "src/reader.ts"),
+  );
+  scan.previous = { ...scan.previous, typescriptConfigs: [] };
+  const missingAlias = await analyzeCompatibility(scan);
+  assert.ok(
+    missingAlias.coverage.gaps.some(
+      ({ kind, location }) => kind === "unresolved-reference" && location?.path === "src/reader.ts",
+    ),
+  );
+});
+
+test("reports unresolved clients, ambiguous helper returns and reused query builders", async () => {
+  for (const client of [
+    'import { createClient } from "missing-helper"; const client = await createClient();',
+    'import {createClient} from "@supabase/supabase-js"; function helper(){if(flag)return createClient(url,key);return createClient(other,key);}const client=helper();',
+    'import {createClient} from "@supabase/supabase-js"; function helper(){return helper();}const client=helper();',
+    'import {createClient} from "@supabase/supabase-js"; let client=createClient(url,key);',
+  ]) {
+    const report = await analyzeCompatibility(
+      input("", `${client}client.from("users").select("id");`),
+    );
+    assert.equal(report.status, "unknown");
+    assert.equal(report.dependencies.previous.queries, 1);
+    assert.ok(report.coverage.gaps.some(({ kind }) => kind === "unresolved-reference"));
+  }
+  const reused = await analyzeCompatibility(
+    input(
+      "",
+      `import {createClient} from "@supabase/supabase-js";
+    const client=createClient(url,key); let query=client.from("users").select("id");
+    if(flag) query=query.or(dynamicFilters); const result=await query;`,
+    ),
+  );
+  assert.equal(reused.dependencies.previous.queries, 1);
+  assert.equal(reused.status, "unknown");
+  assert.ok(reused.coverage.gaps.some(({ message }) => message.includes("logical filter")));
+  const unrelated = await analyzeCompatibility(
+    input(
+      "",
+      'Array.from(items).map(x=>x);Buffer.from(value).toString();db.query("SELECT id FROM users");',
+    ),
+  );
+  assert.equal(unrelated.dependencies.previous.queries, 1);
+  assert.equal(unrelated.coverage.gaps.length, 0);
+});
+
+test("follows conditional Supabase builder filters and bounded logical expressions", async () => {
+  const report = await analyzeCompatibility(
+    input(
+      "ALTER TABLE public.users DROP COLUMN cursor_id;",
+      `import {createClient} from "@supabase/supabase-js";
+    const client=createClient(url,key);
+    let request=client.from("users").select("id");
+    if(search) request=request.ilike("name", search);
+    if(cursor) request=request.or('updated_at.lt.2026-11-11,and(updated_at.eq.2026-11-11,cursor_id.lt.abc)');
+    const result=await request;`,
+    ),
+  );
+  assert.equal(report.coverage.gaps.length, 0);
+  assert.equal(report.dependencies.previous.queries, 1);
+  assert.equal(report.status, "incompatible");
+  for (const column of ["id", "name", "updated_at", "cursor_id"])
+    assert.ok(
+      report.dependencies.previous.references.some(({ target }) => target.column === column),
+    );
+});
+
+test("traces bounded constant Supabase aliases without losing their later filters", async () => {
+  for (const extension of [
+    'const filtered=request.eq("active",true);await filtered;',
+    'const alias=request;const filtered=alias.in("email",values).order("id").limit(10);await filtered;',
+    'const filtered=request.eq("active",true);await request;await filtered;',
+  ]) {
+    const report = await analyzeCompatibility(
+      input(
+        "ALTER TABLE public.users DROP COLUMN active;",
+        `import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);const request=client.from("users").select("id");${extension}`,
+      ),
+    );
+    assert.equal(report.coverage.gaps.length, 0, extension);
+    assert.ok(
+      report.dependencies.previous.references.some(
+        ({ target }) => target.column === (extension.includes('"email"') ? "email" : "active"),
+      ),
+      extension,
+    );
+  }
+});
+
+test("uses the final projection in a direct Supabase select chain", async () => {
+  const prefix =
+    'import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);';
+  const report = await analyzeCompatibility(
+    input(
+      "ALTER TABLE public.users DROP COLUMN legacy;",
+      `${prefix}await client.from("users").select("legacy").select("id");`,
+    ),
+  );
+  // Destructive migrations retain the existing precautionary status even when
+  // no previous-release dependency intersects them.
+  assert.equal(report.status, "potentially_incompatible");
+  assert.equal(report.findings.length, 0);
+  assert.equal(report.coverage.gaps.length, 0);
+  assert.ok(
+    !report.dependencies.previous.references.some(({ target }) => target.column === "legacy"),
+  );
+  const filtered = await analyzeCompatibility(
+    input(
+      "ALTER TABLE public.users DROP COLUMN legacy;",
+      `${prefix}await client.from("users").select("legacy").eq("legacy",value).select("id");`,
+    ),
+  );
+  assert.equal(filtered.status, "incompatible");
+});
+
+test("Supabase operation matrix retains read, write and scalar-filter dependencies", async () => {
+  for (const [operation, column] of [
+    ['select("id,email").eq("active",true).in("id",ids).order("email").limit(5)', "email"],
+    ['insert({email}).select("id")', "email"],
+    ['update({email}).eq("id",id)', "email"],
+    ['delete().in("email",emails)', "email"],
+  ]) {
+    const report = await analyzeCompatibility(
+      input(
+        `ALTER TABLE public.users DROP COLUMN ${column};`,
+        `import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);await client.from("users").${operation};`,
+      ),
+    );
+    assert.equal(report.status, "incompatible", operation);
+    assert.equal(report.coverage.gaps.length, 0, operation);
+  }
+});
+
+test("query composition across functions, mutable aliases and exported builders retain coverage gaps", async () => {
+  for (const extension of [
+    "let alias=request;await alias;",
+    "consume(request);",
+    'function later(){return request.eq("active",true);}await later();',
+    'export const filtered=request.eq("active",true);',
+    Array.from(
+      { length: 35 },
+      (_, i) => `const alias${i}=${i === 0 ? "request" : `alias${i - 1}`};`,
+    ).join(""),
+  ]) {
+    const report = await analyzeCompatibility(
+      input(
+        "",
+        `import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);const request=client.from("users").select("id");${extension}`,
+      ),
+    );
+    assert.equal(report.status, "unknown", extension);
+    assert.ok(report.coverage.gaps.length, extension);
+  }
+  const scan = input("");
+  scan.previous.sources = [
+    {
+      path: "src/query.ts",
+      text: 'import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);export const request=client.from("users").select("id");',
+    },
+    {
+      path: "src/reader.ts",
+      text: 'import {request} from "./query";await request.eq("active",true);',
+    },
+  ];
+  assert.equal((await analyzeCompatibility(scan)).status, "unknown");
+});
+
+test("accepts guarded UUID and timestamp values without treating dynamic filter structure as static", async () => {
+  const schema = {
+    path: "src/cursor.ts",
+    text: 'import {z} from "zod"; export const cursorSchema=z.object({at:z.iso.datetime({offset:true}),id:z.uuid()});',
+  };
+  const prefix =
+    'import {createClient} from "@supabase/supabase-js";import {cursorSchema} from "./cursor";const client=createClient(url,key);let request=client.from("users").select("id");const cursor=cursorSchema.safeParse(raw);';
+  const valid = `if(cursor.success) request=request.or(\`updated_at.lt.\${cursor.data.at},and(updated_at.eq.\${cursor.data.at},cursor_id.lt.\${cursor.data.id})\`);await request;`;
+  const scan = input("ALTER TABLE public.users DROP COLUMN cursor_id;");
+  scan.previous.sources = [schema, { path: "src/users.ts", text: prefix + valid }];
+  const report = await analyzeCompatibility(scan);
+  assert.equal(report.coverage.gaps.length, 0);
+  assert.equal(report.status, "incompatible");
+  for (const text of [
+    valid.replace("if(cursor.success) ", ""),
+    valid.replace(`updated_at.lt.\${cursor.data.at}`, `\${cursor.data.id}.lt.1`),
+    valid.replace(`updated_at.lt.\${cursor.data.at}`, `updated_at.\${cursor.data.id}.1`),
+    `if(cursor.success){cursor.data.id=untrusted;request=request.or(\`cursor_id.lt.\${cursor.data.id}\`);}await request;`,
+    `if(cursor.success){mutate(cursor);request=request.or(\`cursor_id.lt.\${cursor.data.id}\`);}await request;`,
+    valid.replace("cursor.data.at", "unvalidated"),
+  ]) {
+    scan.previous.sources = [schema, { path: "src/users.ts", text: prefix + text }];
+    const unresolved = await analyzeCompatibility(scan);
+    assert.ok(unresolved.coverage.gaps.length, text);
+    assert.notEqual(unresolved.status, "incompatible", text);
+  }
+  scan.previous.sources = [
+    { ...schema, text: schema.text.replace("z.uuid()", "z.string()") },
+    { path: "src/users.ts", text: prefix + valid },
+  ];
+  assert.ok((await analyzeCompatibility(scan)).coverage.gaps.length);
+  for (const text of [
+    schema.text.replace("id:z.uuid()", "id:z.uuid(),id:z.string()"),
+    schema.text.replace("id:z.uuid()", "id:z.uuid(),[key]:z.string()"),
+  ]) {
+    scan.previous.sources = [
+      { ...schema, text },
+      { path: "src/users.ts", text: prefix + valid },
+    ];
+    assert.ok((await analyzeCompatibility(scan)).coverage.gaps.length, text);
+  }
+  scan.previous.sources = [
+    schema,
+    { path: "src/users.ts", text: prefix + valid },
+    {
+      path: "src/mutate.ts",
+      text: 'import {cursorSchema} from "./cursor";cursorSchema.safeParse=customParser;',
+    },
+  ];
+  assert.ok((await analyzeCompatibility(scan)).coverage.gaps.length, "mutated validation schema");
+});
+
+test("retains gaps and reduces confidence for escaped or overwritten Supabase builders", async () => {
+  for (const extension of [
+    'const alias=request;alias.select("name");',
+    "request=unknownBuilder;",
+    'request=request.select("name");',
+    "consume(request);",
+    "request.or(raw);",
+    'later(()=>request.eq("name",value));',
+    'request=request.order("name",{referencedTable:"profiles"});',
+  ]) {
+    const report = await analyzeCompatibility(
+      input(
+        "ALTER TABLE public.users DROP COLUMN id;",
+        `import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);let request=client.from("users").select("id");${extension}await request;`,
+      ),
+    );
+    assert.ok(report.coverage.gaps.length, extension);
+    assert.notEqual(report.status, "incompatible", extension);
+    assert.ok(
+      report.dependencies.previous.references.every(({ confidence }) => confidence === "low"),
+      extension,
+    );
+  }
+});
+
+test("logical filters reject unmodeled operators, foreign tables, malformed syntax and oversized inputs", async () => {
+  for (const argument of [
+    "raw",
+    JSON.stringify("id.eq.1,and(name.eq.a"),
+    JSON.stringify("id.in.(1,2)"),
+    JSON.stringify("profiles.name.eq.a"),
+    JSON.stringify("id.eq.1,or()"),
+    `${JSON.stringify("id.eq.1")},{referencedTable:"profiles"}`,
+    JSON.stringify(`${"or(".repeat(18)}id.eq.1${")".repeat(18)}`),
+    JSON.stringify(`id.eq.${"a".repeat(32768)}`),
+  ]) {
+    const report = await analyzeCompatibility(
+      input(
+        "",
+        `import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);await client.from("users").select("id").or(${argument});`,
+      ),
+    );
+    assert.equal(report.status, "unknown", argument.slice(0, 80));
+  }
+  const literal = await analyzeCompatibility(
+    input(
+      "",
+      'import {createClient} from "@supabase/supabase-js";const client=createClient(url,key);await client.from("users").select("id").or(\'name.eq."a,b",not.and(id.neq.1,name.not.ilike.x)\');',
+    ),
+  );
+  assert.equal(literal.coverage.gaps.length, 0);
 });
 
 test("distinguishes row-level security on a new table from a conditional or existing table", async () => {

@@ -823,7 +823,7 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                                 ? "Demo scan"
                                 : "Manual"}
                         </td>
-                        <td>{item.report.findings.length}</td>
+                        <td>{item.compatibility?.findings.length ?? item.report.findings.length}</td>
                         <td>
                           <CompatibilityBadge status={item.compatibility?.status ?? "unknown"} />
                         </td>

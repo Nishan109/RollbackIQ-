@@ -17,7 +17,7 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "typecheck": "pnpm -r typecheck",
-    "test": "tsx --test packages/scanner-core/src/scanner.test.ts packages/scanner-core/src/compatibility/compatibility.test.ts packages/cli/src/cli.test.ts packages/cli/src/compatibility.test.ts apps/web/app/api/scan/route.test.ts apps/web/lib/bounded-json.test.ts apps/web/lib/gemini.test.ts apps/web/lib/github/github.test.ts tests/tenancy.test.ts tests/github-tenancy.test.ts",
+    "test": "tsx --test packages/scanner-core/src/scanner.test.ts packages/scanner-core/src/compatibility/compatibility.test.ts packages/cli/src/cli.test.ts packages/cli/src/compatibility.test.ts apps/web/app/api/scan/route.test.ts apps/web/lib/bounded-json.test.ts apps/web/lib/gemini.test.ts apps/web/lib/github/github.test.ts apps/web/lib/github/worker-service.test.ts tests/tenancy.test.ts tests/github-tenancy.test.ts",
     "check": "pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {

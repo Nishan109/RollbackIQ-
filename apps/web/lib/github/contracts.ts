@@ -6,7 +6,8 @@ export const sha = z.string().regex(/^[a-f0-9]{40}$/);
 export const fullName = z
   .string()
   .max(140)
-  .regex(/^[\w.-]+\/[\w.-]+$/);
+  .regex(/^[\w.-]+\/[\w.-]+$/)
+  .refine((name) => name.split("/").every((part) => part !== "." && part !== ".."));
 const directory = z
   .string()
   .max(200)
@@ -31,6 +32,12 @@ export const scanConfiguration = z.strictObject({
     .refine((s) => Buffer.byteLength(s) <= 63 && !/[\p{Cc}\p{Cf}]/u.test(s))
     .default("public"),
   publishChecks: z.boolean().default(true),
+  checkPolicy: z
+    .strictObject({
+      failOn: z.enum(["critical", "high", "medium", "low", "info", "none"]),
+      incomplete: z.enum(["action_required", "failure"]),
+    })
+    .optional(),
 });
 export type ScanConfiguration = z.infer<typeof scanConfiguration>;
 export const repository = z.object({
@@ -43,6 +50,7 @@ export const installation = z.object({
   app_id: githubId,
   account: z.object({ id: githubId, login: z.string().min(1).max(100) }),
   suspended_at: z.string().nullable().optional(),
+  permissions: z.object({ checks: z.string().optional() }).optional(),
 });
 export const choices = z.object({ installation, repositories: z.array(repository).max(1000) });
 export const jobSchema = z.object({
@@ -59,6 +67,11 @@ export const jobSchema = z.object({
   configuration: scanConfiguration,
   attempts: z.number().int(),
   scan_id: z.uuid().nullable(),
+  check_state: z
+    .enum(["disabled", "pending", "in_progress", "published", "blocked", "failed"])
+    .nullish(),
+  check_error: z.string().nullish(),
+  check_conclusion: z.string().nullish(),
 });
 export type GithubJob = z.infer<typeof jobSchema>;
 

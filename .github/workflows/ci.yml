@@ -19,3 +19,17 @@ jobs:
       - run: pnpm check
       - run: pnpm audit --prod --audit-level high
       - run: pnpm build
+  worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build worker image
+        run: docker build --file Dockerfile.worker --build-arg "ROLLBACKIQ_RELEASE=$GITHUB_SHA" --tag rollbackiq-worker:ci .
+      - name: Smoke test worker image without provider access
+        run: |
+          docker run --rm --network none --cap-drop ALL --read-only --tmpfs /tmp \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/apps/web/scripts/github-worker-smoke.mjs,target=/app/apps/web/scripts/github-worker-smoke.mjs,readonly" \
+            rollbackiq-worker:ci node scripts/github-worker-smoke.mjs "$GITHUB_SHA"

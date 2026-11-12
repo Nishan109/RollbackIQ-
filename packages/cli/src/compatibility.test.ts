@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -41,15 +41,23 @@ test("compatibility Git CLI analyzes two tagged releases without reading the wor
     await mkdir(join(directory, "db", "migrations"), { recursive: true });
     await writeFile(join(directory, "db", "migrations", ".gitkeep"), "");
     await writeFile(
+      join(directory, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } } }),
+    );
+    await writeFile(
+      join(directory, "src", "client.ts"),
+      'import {createClient} from "@supabase/supabase-js";export async function connect(){return createClient(url,key);}',
+    );
+    await writeFile(
       join(directory, "src", "user.ts"),
-      'export const query = pool.query("SELECT full_name FROM public.users");',
+      'import {connect} from "@/client";const client=await connect();export const result=await client.from("users").select("full_name");',
     );
     git("add", ".");
     commit("Previous release");
     git("tag", "v1.0.0");
     await writeFile(
       join(directory, "src", "user.ts"),
-      'throw new Error("Proposed repository code must never execute");\nexport const query = pool.query("SELECT id FROM public.users");',
+      'throw new Error("Proposed repository code must never execute");\nimport {connect} from "@/client";const client=await connect();export const result=await client.from("users").select("id");',
     );
     await writeFile(
       join(directory, "db", "migrations", "002.sql"),
@@ -62,6 +70,7 @@ test("compatibility Git CLI analyzes two tagged releases without reading the wor
       join(directory, "src", "user.ts"),
       "throw new Error('uncommitted code must not execute');",
     );
+    await writeFile(join(directory, "tsconfig.json"), "uncommitted configuration must not be read");
     const before = git("status", "--porcelain");
     const args = [
       "--repo",
@@ -84,6 +93,8 @@ test("compatibility Git CLI analyzes two tagged releases without reading the wor
     assert.equal(report.kind, "release-compatibility");
     assert.equal(report.status, "incompatible");
     assert.equal(report.previous.commit, git("rev-parse", "v1.0.0"));
+    assert.equal(report.dependencies.previous.queries, 1);
+    assert.equal(report.coverage.gaps.length, 0);
     assert.equal(report.findings[0].previousEvidence[0].location.path, "src/user.ts");
     assert.equal(report.sourceChanges[0].status, "modified");
     assert.equal(git("status", "--porcelain"), before);

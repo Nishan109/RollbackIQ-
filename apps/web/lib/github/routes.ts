@@ -115,6 +115,10 @@ export function githubPost(action: "connect" | "repositories" | "disconnect" | "
           previous: body.previous,
           defaultSchema: body.defaultSchema || "public",
           publishChecks: body.publishChecks === "on" || body.publishChecks === true,
+          checkPolicy:
+            body.checkFailOn !== undefined || body.checkIncomplete !== undefined
+              ? { failOn: body.checkFailOn, incomplete: body.checkIncomplete }
+              : undefined,
         });
         await store("configure", {
           ...common,

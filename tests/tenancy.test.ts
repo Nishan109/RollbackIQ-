@@ -8,6 +8,27 @@ const other = "00000000-0000-4000-8000-000000000002";
 const viewer = "00000000-0000-4000-8000-000000000003";
 const developer = "00000000-0000-4000-8000-000000000004";
 
+test("enabling RLS on an existing conditional fixture changes ordinary-role reads", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(
+      "create role fixture_reader;create table public.qa(id bigint primary key);insert into public.qa values(1);grant select on public.qa to fixture_reader;",
+    );
+    const read = () =>
+      db.transaction(async (tx) => {
+        await tx.exec("set local role fixture_reader");
+        return (await tx.query("select id from public.qa")).rows;
+      });
+    assert.equal((await read()).length, 1);
+    await db.exec(
+      "create table if not exists public.qa(id bigint primary key);alter table public.qa enable row level security;",
+    );
+    assert.equal((await read()).length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
 test("tenant migration enforces role and organization isolation, transactional persistence and replay", async () => {
   const db = new PGlite();
   try {

@@ -287,13 +287,43 @@ export default async function GithubPage({
               />
               Publish GitHub Checks
             </label>
+            <label>
+              Fail the Check at this severity or higher
+              <select
+                name="checkFailOn"
+                defaultValue={String(
+                  (repo.configuration.checkPolicy as { failOn?: string } | undefined)?.failOn ??
+                    "high",
+                )}
+              >
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+                <option value="info">Info</option>
+                <option value="none">Only confirmed incompatibilities</option>
+              </select>
+            </label>
+            <label>
+              Incomplete analysis
+              <select
+                name="checkIncomplete"
+                defaultValue={String(
+                  (repo.configuration.checkPolicy as { incomplete?: string } | undefined)
+                    ?.incomplete ?? "action_required",
+                )}
+              >
+                <option value="action_required">Require action</option>
+                <option value="failure">Fail the Check</option>
+              </select>
+            </label>
             <label className="github-checkbox">
               <input type="checkbox" name="enabled" defaultChecked={repo.enabled} />
               Enable automatic pull-request scans
             </label>
             <p>
-              The configured previous release is compared with the exact pull-request head. Checks
-              require review for High/Critical findings or incomplete coverage.
+              The configured previous release is compared with the exact pull request head.
+              Confirmed incompatibilities always fail the Check.
             </p>
             <button className="button primary compact" type="submit">
               Save scan configuration

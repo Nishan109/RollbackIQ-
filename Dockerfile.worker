@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+FROM node:22-bookworm-slim AS dependencies
+WORKDIR /app
+RUN npm install --global --ignore-scripts pnpm@11.25.0
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/web/package.json apps/web/tsconfig.json ./apps/web/
+COPY packages/scanner-core/package.json packages/scanner-core/tsconfig.json ./packages/scanner-core/
+COPY packages/cli/package.json ./packages/cli/
+RUN pnpm --filter @rollbackiq/web... install --prod --frozen-lockfile
+COPY apps/web/lib ./apps/web/lib
+COPY apps/web/scripts/github-worker.ts ./apps/web/scripts/github-worker.ts
+COPY packages/scanner-core/src ./packages/scanner-core/src
+
+FROM node:22-bookworm-slim AS worker
+ARG ROLLBACKIQ_RELEASE
+ENV NODE_ENV=production \
+    ROLLBACKIQ_WORKER_PRODUCTION=true \
+    ROLLBACKIQ_RELEASE=${ROLLBACKIQ_RELEASE} \
+    WORKER_HEALTH_HOST=0.0.0.0 \
+    WORKER_HEALTH_PORT=8080
+COPY --from=dependencies --chown=node:node /app /app
+WORKDIR /app/apps/web
+USER node
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s CMD ["node", "-e", "fetch('http://127.0.0.1:'+process.env.WORKER_HEALTH_PORT+'/livez',{signal:AbortSignal.timeout(2000)}).then(r=>{if(!r.ok)process.exitCode=1}).catch(()=>{process.exitCode=1})"]
+CMD ["node", "--import", "tsx", "scripts/github-worker.ts"]

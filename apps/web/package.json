@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "github:worker": "tsx --env-file-if-exists=.env.local scripts/github-worker.ts",
+    "gemini:verify": "tsx --env-file-if-exists=.env.local scripts/gemini-verify.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "next": "16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "tsx": "4.23.15",
     "zod": "4.6.7"
   },
   "devDependencies": {

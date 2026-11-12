@@ -146,7 +146,10 @@ export function CompatibilityPanel({
                 ))}
               </ul>
             ) : (
-              <p>Review the coverage gap to establish the missing dependency evidence.</p>
+              <p>
+                No previous-release query reference was resolved for this finding. Review its
+                limitations and verify the affected database behavior.
+              </p>
             )}
             {finding.proposedEvidence.length > 0 && (
               <p>

@@ -4,6 +4,7 @@ import {
   MAX_FILES,
   MAX_TOTAL_BYTES,
 } from "@rollbackiq/scanner-core";
+import { isTypescriptConfig } from "@rollbackiq/scanner-core/compatibility";
 import type {
   ChangedFile,
   CompatibilityInput,
@@ -12,7 +13,7 @@ import type {
 } from "@rollbackiq/scanner-core/compatibility/contracts";
 import { z } from "zod";
 import { type ScanConfiguration, sha } from "./contracts";
-import type { Github } from "./provider";
+import { type Github, GithubError } from "./provider";
 
 const treeEntry = z.object({
   path: z.string(),
@@ -24,7 +25,7 @@ const treeEntry = z.object({
 type Entry = z.infer<typeof treeEntry>;
 const inDirectory = (path: string, dir: string) => dir === "." || path.startsWith(`${dir}/`);
 export async function githubSnapshot(
-  provider: Github,
+  provider: Pick<Github, "request" | "signal">,
   token: string,
   name: string,
   head: string,
@@ -143,7 +144,9 @@ export async function githubSnapshot(
         const text = await read(entry);
         result.push({ path: entry.path, text });
         bytes += Buffer.byteLength(text);
-      } catch {
+      } catch (error) {
+        provider.signal?.throwIfAborted();
+        if (error instanceof GithubError) throw error;
         addGap("File is unavailable, binary, oversized or unsupported. Verify this file manually.");
       }
     }
@@ -172,7 +175,15 @@ export async function githubSnapshot(
         message: "Configured Prisma schema is missing.",
         location: { path: config.prisma, line: 1, column: 1 },
       });
-    return { release: { ref, commit }, sources, prisma };
+    const typescriptConfigs = await files(
+      [...entries.values()]
+        .filter((entry) => isTypescriptConfig(entry.path))
+        .sort((a, b) => a.path.localeCompare(b.path)),
+      side,
+      32,
+      1024 * 1024,
+    );
+    return { release: { ref, commit }, sources, prisma, typescriptConfigs };
   }
   const [oldSnapshot, newSnapshot, migrations, baseline] = await Promise.all([
     snapshot("previous", oldTree, previous.sha, config.previous),

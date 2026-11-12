@@ -3,41 +3,78 @@
 import { useState } from "react";
 import type { Explanation } from "@/lib/gemini";
 
-export function AiExplanation({ scanId, enabled }: { scanId: string; enabled: boolean }) {
+type ExplanationResult = {
+  explanation: Explanation;
+  finding?: { ruleId: string; object?: string; confidence: string };
+};
+
+export function AiExplanation({
+  scanId,
+  enabled,
+  findings,
+}: {
+  scanId: string;
+  enabled: boolean;
+  findings: readonly { id: string; ruleId: string; title: string }[];
+}) {
   const [busy, setBusy] = useState(false);
-  const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [selected, setSelected] = useState("");
+  const [result, setResult] = useState<ExplanationResult | null>(null);
   const [error, setError] = useState("");
   async function request() {
     setBusy(true);
     setError("");
+    setResult(null);
     try {
-      const response = await fetch(`/api/scans/${scanId}/explain`, {
+      const params = selected ? `?${new URLSearchParams({ finding: selected }).toString()}` : "";
+      const response = await fetch(`/api/scans/${scanId}/explain${params}`, {
         method: "POST",
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       });
-      const data = (await response.json()) as { explanation?: Explanation; error?: string };
+      const data = (await response.json()) as Partial<ExplanationResult> & { error?: string };
       if (!response.ok || !data.explanation)
         throw new Error(data.error ?? "Gemini is unavailable.");
-      setExplanation(data.explanation);
+      setResult({ explanation: data.explanation, finding: data.finding });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Gemini is unavailable.");
     } finally {
       setBusy(false);
     }
   }
+  const explanation = result?.explanation;
   return (
     <section className="dashboard-card team-card">
       <h2>Gemini explanation</h2>
       {enabled ? (
         <>
-          <p>Send rule categories and evidence counts for an explanation.</p>
+          {!!findings.length && (
+            <label className="scan-form">
+              Explain
+              <select
+                disabled={busy}
+                value={selected}
+                onChange={(event) => {
+                  setSelected(event.target.value);
+                  setResult(null);
+                  setError("");
+                }}
+              >
+                <option value="">Entire scan</option>
+                {findings.map(({ id, ruleId, title }) => (
+                  <option key={id} value={id}>
+                    {ruleId} · {title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             className="button secondary compact"
             type="button"
             disabled={busy}
             onClick={request}
           >
-            {busy ? "Generating…" : "Explain this scan"}
+            {busy ? "Generating…" : "Generate AI explanation"}
           </button>
         </>
       ) : (
@@ -50,10 +87,27 @@ export function AiExplanation({ scanId, enabled }: { scanId: string; enabled: bo
       )}
       {explanation && (
         <div className="ai-explanation">
-          <span className="neutral-pill">Generated guidance</span>
+          <h3>AI-generated explanation</h3>
+          {result.finding && (
+            <p>
+              Evidence for {result.finding.ruleId} · {result.finding.confidence} confidence
+              {result.finding.object && (
+                <>
+                  {" "}
+                  · <code>{result.finding.object}</code>
+                </>
+              )}
+            </p>
+          )}
           <p>{explanation.summary}</p>
+          <h4>What changed</h4>
+          <p>{explanation.whatChanged}</p>
+          <h4>Previous release</h4>
+          <p>{explanation.previousReleaseImpact}</p>
+          <h4>Potential application impact</h4>
           <p>{explanation.potentialImpact}</p>
           {[
+            ["Investigation", explanation.investigation],
             ["Recommendations", explanation.recommendations],
             ["Verification steps", explanation.verificationSteps],
             ["Limitations", explanation.limitations],

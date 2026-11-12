@@ -12,6 +12,7 @@ import type {
   Snapshot,
 } from "./contracts";
 import { inspectPrisma, literalObject, prismaModels } from "./prisma";
+import { sourceFile, typescriptProgram } from "./source-program";
 import { inspectSql, type queryParser } from "./sql";
 import { inspectSupabase, supabaseQuery } from "./supabase";
 
@@ -21,25 +22,6 @@ const QUERY_RECEIVERS = new Set(["db", "pool", "client", "pg", "connection"]);
 
 export function stableId(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 24);
-}
-
-function typescriptProgram(files: Map<string, ts.SourceFile>) {
-  const host: ts.CompilerHost = {
-    getSourceFile: (name) => files.get(name),
-    getDefaultLibFileName: () => "lib.d.ts",
-    writeFile: () => undefined,
-    getCurrentDirectory: () => "",
-    getCanonicalFileName: (name) => name,
-    useCaseSensitiveFileNames: () => true,
-    getNewLine: () => "\n",
-    fileExists: (name) => files.has(name),
-    readFile: (name) => files.get(name)?.text,
-  };
-  return ts.createProgram(
-    [...files.keys()],
-    { noLib: true, noResolve: true, allowJs: true, jsx: ts.JsxEmit.Preserve },
-    host,
-  );
 }
 
 export async function analyzeDependencies(
@@ -83,12 +65,15 @@ export async function analyzeDependencies(
   const sourceFiles = new Map(
     snapshot.sources
       .filter(({ path }) => !path.endsWith(".sql"))
-      .map(({ path, text }) => [
-        path,
-        ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true),
-      ]),
+      .map(({ path, text }) => [path, sourceFile(path, text)]),
   );
-  const program = typescriptProgram(sourceFiles);
+  const program = typescriptProgram(sourceFiles, snapshot.typescriptConfigs ?? [], (path) =>
+    addGap(
+      "source",
+      "TypeScript module configuration could not be fully resolved. Verify shared client imports.",
+      { path, line: 1, column: 1 },
+    ),
+  );
   const checker = program.getTypeChecker();
   if (!snapshot.sources.length)
     addGap(
@@ -204,11 +189,19 @@ export async function analyzeDependencies(
       }
       const method = call.expression;
       if (!ts.isPropertyAccessExpression(method)) continue;
-      const supabase = supabaseQuery(call, checker);
+      const supabase = supabaseQuery(call, checker, program);
       if (supabase) {
         const context = queryContext(location, "static-sql-reference");
         if (context)
-          inspectSupabase(call, supabase.schema, supabase.rpc, checker, context.emit, context.gap);
+          inspectSupabase(
+            call,
+            supabase.schema,
+            supabase.rpc,
+            checker,
+            context.emit,
+            context.gap,
+            program,
+          );
         continue;
       }
       if (

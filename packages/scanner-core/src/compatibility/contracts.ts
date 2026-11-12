@@ -46,6 +46,7 @@ export interface Snapshot {
   release: ReleaseReference;
   sources: readonly SourceFile[];
   prisma?: SourceFile;
+  typescriptConfigs?: readonly SourceFile[];
 }
 
 export interface ChangedFile {
