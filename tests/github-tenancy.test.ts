@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { analyzeCompatibility } from "../packages/scanner-core/src/compatibility/index";
 
-test("GitHub migration protects authorization, tenant links, webhook replay and worker leases", async () => {
+test("the worker upgrade preserves existing reports, tenant isolation and queue behavior", async () => {
   const db = new PGlite();
   const owner = "00000000-0000-4000-8000-000000000001",
     other = "00000000-0000-4000-8000-000000000002",
@@ -19,17 +19,10 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
       "20261111105615_rollbackiq_tenants.sql",
       "20261111105623_github_app.sql",
       "20261111110013_private_storage_hardening.sql",
-      "20261111154108_github_worker_operations.sql",
-      "20261111155003_gemini_daily_budget.sql",
     ])
       await db.exec(
         await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"),
       );
-    const privateStorage = await db.query<{ name: string; rls: boolean; user_read: boolean }>(
-      `select c.relname name,c.relrowsecurity rls,has_table_privilege('authenticated',c.oid,'SELECT') user_read from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='rollbackiq_private' and c.relkind='r'`,
-    );
-    assert.equal(privateStorage.rows.length, 4);
-    assert.ok(privateStorage.rows.every((table) => table.rls && !table.user_read));
     const createOrg = async (user: string) =>
       db.transaction(async (tx) => {
         await tx.exec("set local role authenticated");
@@ -58,27 +51,6 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
         ).rows[0]?.result;
       });
     const worker = (action: string, data: Record<string, unknown> = {}) => rpc(action, data, true);
-    assert.deepEqual(await worker("health"), { protocol: 2 });
-    const reserve = async (actor: string) =>
-      db.transaction(async (tx) => {
-        await tx.exec("set local role service_role");
-        const result = await tx.query<{ ok: boolean }>(
-          "select public.rollbackiq_reserve_explanation($1,1,2) as ok",
-          [actor],
-        );
-        return result.rows[0]?.ok;
-      });
-    assert.equal(await reserve(owner), true);
-    assert.equal(await reserve(owner), false);
-    assert.equal(await reserve(other), true);
-    assert.equal(await reserve(viewer), false);
-    await assert.rejects(
-      db.transaction(async (tx) => {
-        await tx.exec("set local role authenticated");
-        await tx.query("select public.rollbackiq_reserve_explanation($1,1,2)", [owner]);
-      }),
-      /permission denied/,
-    );
     const common = { actor: owner, organization: a };
     const hash = "a".repeat(64);
     await assert.rejects(
@@ -210,6 +182,51 @@ test("GitHub migration protects authorization, tenant links, webhook replay and 
       (await db.query<{ count: number }>("select count(*)::int count from public.finding_evidence"))
         .rows[0]?.count,
     );
+
+    for (const file of [
+      "20261111154108_github_worker_operations.sql",
+      "20261111155003_gemini_daily_budget.sql",
+    ])
+      await db.exec(
+        await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), "utf8"),
+      );
+    assert.deepEqual(await worker("health"), { protocol: 2 });
+    assert.deepEqual(
+      await worker("report", { job: retry.id, lease: retry.lease_token }),
+      JSON.parse(JSON.stringify(report)),
+    );
+    await rpc("webhook", event);
+    assert.deepEqual(
+      (await db.query("select id, status, attempts, scan_id, check_state from public.github_jobs"))
+        .rows,
+      [{ id: retry.id, status: "running", attempts: 2, scan_id: saved.scan, check_state: null }],
+    );
+    const privateStorage = await db.query<{ name: string; rls: boolean; user_read: boolean }>(
+      `select c.relname name,c.relrowsecurity rls,has_table_privilege('authenticated',c.oid,'SELECT') user_read from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='rollbackiq_private' and c.relkind='r'`,
+    );
+    assert.equal(privateStorage.rows.length, 4);
+    assert.ok(privateStorage.rows.every((table) => table.rls && !table.user_read));
+    const reserve = async (actor: string) =>
+      db.transaction(async (tx) => {
+        await tx.exec("set local role service_role");
+        const result = await tx.query<{ ok: boolean }>(
+          "select public.rollbackiq_reserve_explanation($1,1,2) as ok",
+          [actor],
+        );
+        return result.rows[0]?.ok;
+      });
+    assert.equal(await reserve(owner), true);
+    assert.equal(await reserve(owner), false);
+    assert.equal(await reserve(other), true);
+    assert.equal(await reserve(viewer), false);
+    await assert.rejects(
+      db.transaction(async (tx) => {
+        await tx.exec("set local role authenticated");
+        await tx.query("select public.rollbackiq_reserve_explanation($1,1,2)", [owner]);
+      }),
+      /permission denied/,
+    );
+
     await rpc("disconnect", common);
     await assert.rejects(rpc("finish", { job: retry.id, lease: retry.lease_token }), /lease/);
     assert.equal(
