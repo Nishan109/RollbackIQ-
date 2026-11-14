@@ -1853,6 +1853,255 @@ td .rule-code {
   max-width: 680px;
   margin-block: 18px;
 }
+
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  inset: 12px auto auto 12px;
+  padding: 8px 14px;
+  color: var(--bg);
+  background: #c7d2fe;
+  border-radius: 6px;
+  transform: translateY(-160%);
+}
+.skip-link:focus {
+  transform: none;
+}
+.product-team,
+.auth-layout {
+  overflow-wrap: anywhere;
+}
+.product-team .team-card,
+.product-team .table-card {
+  min-width: 0;
+}
+.product-team .team-card {
+  padding: clamp(16px, 3vw, 24px);
+}
+.product-team .team-card h2 {
+  font-size: 19px;
+  margin-bottom: 8px;
+}
+.product-team .button.compact,
+.auth-layout .button.compact {
+  white-space: normal;
+  min-height: 42px;
+  text-align: center;
+}
+.product-nav,
+.report-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.product-nav > a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+}
+.workspace-intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-bottom: 16px;
+}
+.workspace-account {
+  color: var(--muted);
+  font-size: 13px;
+}
+.workspace-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 14px;
+}
+.organization-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.organization-link[aria-current="page"] {
+  background: #222745;
+  border-color: #6d73db;
+  color: var(--ink);
+}
+.setup-card {
+  border-top: 2px solid #787cf5;
+  background: linear-gradient(145deg, #171e33, var(--surface) 65%);
+}
+.setup-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr));
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin-block: 12px 16px;
+}
+.setup-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #303b53;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.setup-steps li[data-complete="true"] {
+  border-color: #35544e;
+  color: #c4eadb;
+}
+.setup-steps svg,
+.organization-link svg {
+  flex-shrink: 0;
+}
+.setup-steps small,
+.github-settings label small {
+  display: block;
+  color: var(--muted);
+}
+.setup-card > .button,
+.product-team .team-card > form,
+.product-team .team-card > .text-link {
+  margin-top: 10px;
+}
+.workspace-activity,
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.workspace-activity > .team-card {
+  margin: 0;
+}
+.workspace-list,
+.team-card ul.workspace-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.workspace-list li {
+  min-width: 0;
+  padding-block: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-list li:last-child {
+  border-bottom: 0;
+}
+.workspace-list a,
+.job-heading {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+.workspace-repositories li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  justify-content: space-between;
+}
+.workspace-settings > summary {
+  min-height: 32px;
+  font-size: 16px;
+  font-weight: 620;
+}
+.report-downloads {
+  padding-block: 14px;
+}
+.scan-history [aria-current="page"] {
+  text-decoration: underline;
+}
+.finding-location code {
+  overflow-wrap: anywhere;
+}
+.help-intro {
+  margin-block: 24px;
+}
+.help-intro svg {
+  color: var(--lavender);
+}
+.help-grid {
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: start;
+}
+.help-toc {
+  display: grid;
+  gap: 7px;
+}
+.help-content section {
+  scroll-margin-top: 20px;
+}
+.help-content p,
+.help-content dd {
+  margin-block: 7px;
+}
+.help-content ol {
+  margin-left: 23px;
+  list-style: decimal;
+}
+.help-content li {
+  padding-block: 4px;
+}
+.help-content p a,
+.help-content li a {
+  color: var(--lavender);
+  text-decoration: underline;
+}
+.help-content dt {
+  font-weight: 650;
+  margin-top: 10px;
+}
+.help-content dd {
+  color: var(--muted);
+}
+.help-content summary {
+  padding-block: 5px;
+}
+@media (max-width: 700px) {
+  .marketing .site-nav {
+    height: auto;
+    min-height: 62px;
+    padding-block: 8px;
+  }
+  .marketing .site-nav nav {
+    display: flex;
+    flex-wrap: wrap;
+    grid-row: 2;
+    grid-column: 1 / -1;
+    gap: 2px 16px;
+  }
+  .marketing .site-nav nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+  }
+  .workspace-activity,
+  .help-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .product-team .table-scroll {
+    overflow-x: auto;
+  }
+  .product-team .compatibility-panel .card-title {
+    min-width: 0;
+  }
+  .product-team .compatibility-panel .card-title > div {
+    min-width: 0;
+  }
+  .product-team .button.compact {
+    min-height: 44px;
+  }
+}
 @media (max-width: 540px) {
   .topbar .breadcrumbs > span,
   .topbar .breadcrumbs > svg {

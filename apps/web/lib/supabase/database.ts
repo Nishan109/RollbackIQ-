@@ -8,6 +8,11 @@ export interface Database {
   public: {
     Tables: {
       organizations: Table<{ id: string; name: string; created_at: string }>;
+      github_connections: Table<{
+        installation_id: number;
+        organization_id: string;
+        status: string;
+      }>;
       github_jobs: Table<{
         id: string;
         organization_id: string;
@@ -28,7 +33,11 @@ export interface Database {
       github_repositories: Table<{
         repository_id: string;
         organization_id: string;
+        installation_id: number;
         full_name: string;
+        status: string;
+        enabled: boolean;
+        configuration: unknown;
       }>;
       organization_members: Table<{
         organization_id: string;

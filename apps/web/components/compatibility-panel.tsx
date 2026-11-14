@@ -9,6 +9,14 @@ import { ArrowRight, GitCompareArrows } from "lucide-react";
 import { useState } from "react";
 import { SeverityBadge } from "./report-ui";
 
+type CompatibilityView = Pick<
+  CompatibilityReport,
+  "previous" | "proposed" | "status" | "coverage" | "findings"
+> & {
+  dependencies: { previous: { queries: number } };
+  migrationReport?: { files: readonly { path: string }[] } | null;
+};
+
 export const compatibilityLabels: Record<CompatibilityStatus, string> = {
   incompatible: "Incompatible",
   potentially_incompatible: "Potentially incompatible",
@@ -31,7 +39,7 @@ export function CompatibilityPanel({
   github = false,
   onOpenMigration,
 }: {
-  report: CompatibilityReport;
+  report: CompatibilityView;
   migrationPath?: string;
   imported?: boolean;
   github?: boolean;
@@ -39,6 +47,7 @@ export function CompatibilityPanel({
 }) {
   const [confidence, setConfidence] = useState<EvidenceConfidence | "all">("all");
   const [query, setQuery] = useState("");
+  const filtered = query.trim() !== "" || confidence !== "all";
   const coverageReasons = [...new Set(report.coverage.gaps.map(({ message }) => message))];
   const findings = report.findings.filter(
     (finding) =>
@@ -89,6 +98,12 @@ export function CompatibilityPanel({
           )}
         </div>
       )}
+      {!migrationPath && report.status === "potentially_incompatible" && (
+        <p className="compatibility-note">
+          Review the evidence and test the affected behavior with your deployed schema and
+          application roles.
+        </p>
+      )}
       {imported && (
         <p className="compatibility-note">
           Verify the imported report’s source and commit references before relying on its
@@ -130,6 +145,14 @@ export function CompatibilityPanel({
               <span className="neutral-pill">{finding.confidence} confidence</span>
             </div>
             {finding.object && <code className="evidence">{finding.object}</code>}
+            {finding.location && (
+              <p className="finding-location">
+                <strong>Migration</strong>{" "}
+                <code>
+                  {finding.location.path}:{finding.location.line}:{finding.location.column}
+                </code>
+              </p>
+            )}
             <p>{finding.message}</p>
             <h3>Previous-release evidence</h3>
             {finding.previousEvidence.length ? (
@@ -179,8 +202,10 @@ export function CompatibilityPanel({
         </details>
       ))}
       {!findings.length && (
-        <p className="compatibility-note">
-          No matching compatibility findings within the analyzed scope.
+        <p className="compatibility-note" role="status">
+          {filtered
+            ? "No findings match these filters. Clear the search or choose another confidence level."
+            : "No findings for this view within the analyzed scope. Review coverage and limitations before relying on the result."}
         </p>
       )}
       {!migrationPath && (

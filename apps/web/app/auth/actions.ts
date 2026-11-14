@@ -20,7 +20,17 @@ export async function submitCredentials(form: FormData) {
       email: email.data,
       password: password.data,
     });
-    if (error) redirect("/auth?notice=credentials");
+    if (error) {
+      const notice =
+        error.status === 429
+          ? "slow-down"
+          : error.code === "email_not_confirmed"
+            ? "verify"
+            : error.code === "invalid_credentials"
+              ? "credentials"
+              : "unavailable";
+      redirect(`/auth?notice=${notice}`);
+    }
     redirect("/team");
   }
   const { data, error } = await client.auth.signUp({
@@ -28,7 +38,8 @@ export async function submitCredentials(form: FormData) {
     password: password.data,
     options: { emailRedirectTo: `${appOrigin()}/auth/callback` },
   });
-  if (error) redirect("/auth?mode=signup&notice=unavailable");
+  if (error)
+    redirect(`/auth?mode=signup&notice=${error.status === 429 ? "slow-down" : "unavailable"}`);
   redirect(data.session ? "/team" : "/auth?notice=verify");
 }
 
@@ -37,9 +48,11 @@ export async function requestReset(form: FormData) {
   if (!email.success) redirect("/auth?mode=forgot&notice=invalid");
   const client = await supabaseServer();
   if (!client) redirect("/auth?notice=unconfigured");
-  await client.auth.resetPasswordForEmail(email.data, {
+  const { error } = await client.auth.resetPasswordForEmail(email.data, {
     redirectTo: `${appOrigin()}/auth/callback?flow=recovery`,
   });
+  if (error?.status === 0 || (error?.status && error.status >= 500))
+    redirect("/auth?mode=forgot&notice=unavailable");
   redirect("/auth?notice=reset-sent");
 }
 

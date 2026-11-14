@@ -1,16 +1,23 @@
+import { Download, GitPullRequest } from "lucide-react";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Brand } from "@/components/brand";
 import { CompatibilityPanel } from "@/components/compatibility-panel";
+import { NavigationStatus } from "@/components/navigation-status";
+import { SubmitButton } from "@/components/submit-button";
 import { compatibilityReportSchema } from "@/lib/compatibility-report";
 import { geminiSettings } from "@/lib/gemini";
 import { checkMessages } from "@/lib/github/checks";
 import { fullName } from "@/lib/github/contracts";
 import { idSchema, repositoryFor, scanCursor, scanPage } from "@/lib/supabase/scans";
 import { requireIdentity } from "@/lib/supabase/server";
+import { canManageGitHub, jobStatus, verdictLabel } from "@/lib/team-experience";
 import { reviewScan } from "../../actions";
 import { AiExplanation } from "./ai-explanation";
 import { UploadScan } from "./upload-scan";
+
+export const metadata: Metadata = { title: "Repository reports", robots: { index: false } };
 
 export default async function RepositoryPage({
   params,
@@ -57,7 +64,7 @@ export default async function RepositoryPage({
       client
         .from("github_jobs")
         .select(
-          "id,pull_number,head_sha,status,attempts,error,scan_id,created_at,check_id,check_state,check_error,check_conclusion",
+          "id,pull_number,head_sha,status,attempts,scan_id,check_id,check_state,check_error,check_conclusion",
         )
         .eq("repository_id", repo.id)
         .order("created_at", { ascending: false })
@@ -82,72 +89,139 @@ export default async function RepositoryPage({
   const githubName = fullName.safeParse(githubRepository.data?.full_name);
   const githubUrl = githubName.success ? `https://github.com/${githubName.data}` : null;
   return (
-    <main className="container team-layout">
+    <main className="container team-layout product-team">
       <header className="team-header">
         <Brand />
-        <Link className="text-link" href="/team">
-          Team workspace
-        </Link>
+        <nav className="product-nav" aria-label="Workspace navigation">
+          <Link className="text-link" href={`/team?organization=${repo.organization_id}`}>
+            Team workspace
+          </Link>
+          <Link className="text-link" href="/help#understanding-scans">
+            Report guide
+          </Link>
+        </nav>
       </header>
       <h1>{repo.name}</h1>
-      <Link className="text-link" href={`/team/github?organization=${repo.organization_id}`}>
-        GitHub connection and scan settings
-      </Link>
-      {jobs.error && <p className="form-error">GitHub job status is temporarily unavailable.</p>}
-      {!!jobs.data?.length && (
-        <section className="dashboard-card team-card">
-          <h2>GitHub scan jobs</h2>
-          <p>Refresh this page to see worker progress.</p>
-          <ul>
-            {jobs.data.map((job) => (
-              <li key={job.id}>
-                {githubUrl ? (
-                  <a className="text-link" href={`${githubUrl}/pull/${job.pull_number}`}>
-                    PR #{job.pull_number}
-                  </a>
-                ) : (
-                  <>PR #{job.pull_number}</>
-                )}
-                {" · "}
-                <code title={job.head_sha}>{job.head_sha.slice(0, 12)}</code>
-                {" · "}
-                <strong className="job-status">{job.status}</strong>
-                {" · Attempt "}
-                {job.attempts}
-                {job.error && <p className="form-error">{job.error}</p>}
-                <p>
-                  GitHub Check{" · "}
-                  {(
-                    job.check_state ?? (job.check_id ? "legacy record" : "not recorded")
-                  ).replaceAll("_", " ")}
-                  {job.check_conclusion && ` · ${job.check_conclusion.replaceAll("_", " ")}`}
-                  {githubUrl && job.check_id && (
-                    <>
-                      {" · "}
-                      <a className="text-link" href={`${githubUrl}/runs/${job.check_id}`}>
-                        Open Check
-                      </a>
-                    </>
-                  )}
-                </p>
-                {job.check_error && (
-                  <p className="form-error">
-                    {checkMessages[job.check_error] ?? "Check publication needs review."}
-                  </p>
-                )}
-                {job.scan_id && (
-                  <Link
-                    className="text-link"
-                    href={`/team/repositories/${repo.id}?scan=${job.scan_id}`}
-                  >
-                    Open saved report
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
+      {canManageGitHub(membership.data?.role) && (
+        <Link className="text-link" href={`/team/github?organization=${repo.organization_id}`}>
+          GitHub connection and scan settings
+        </Link>
       )}
+      {report?.success && selected?.data && (
+        <div id="selected-report">
+          <nav className="report-downloads" aria-label="Export saved report">
+            <a
+              className="button secondary compact"
+              href={`/api/scans/${selected.data.id}?format=json`}
+            >
+              <Download size={16} aria-hidden="true" /> Download JSON
+            </a>
+            <a
+              className="button secondary compact"
+              href={`/api/scans/${selected.data.id}?format=sarif`}
+            >
+              <Download size={16} aria-hidden="true" /> Download SARIF
+            </a>
+            <Link className="text-link" href="/help#exports">
+              Export help
+            </Link>
+            <a className="text-link" href="#scan-history">
+              Scan history
+            </a>
+          </nav>
+          <CompatibilityPanel
+            key={selected.data.id}
+            report={{
+              previous: report.data.previous,
+              proposed: report.data.proposed,
+              status: report.data.status,
+              coverage: report.data.coverage,
+              findings: report.data.findings,
+              dependencies: { previous: { queries: report.data.dependencies.previous.queries } },
+            }}
+            imported={!selectedJob?.data}
+            github={!!selectedJob?.data}
+          />
+        </div>
+      )}
+      <section className="dashboard-card team-card" id="scan-jobs">
+        <h2>GitHub scan jobs</h2>
+        {jobs.error ? (
+          <p className="form-error" role="alert">
+            GitHub job status is temporarily unavailable. Reload this page to retry.
+          </p>
+        ) : !jobs.data?.length ? (
+          <p>
+            No pull request jobs yet. Eligible pull request events queue a scan for processing.{" "}
+            <Link className="text-link" href="/help#troubleshooting">
+              See why a scan might be missing
+            </Link>
+            .
+          </p>
+        ) : (
+          <>
+            <p>Refresh to see the latest recorded status. Queued jobs can take time to process.</p>
+            <ul className="workspace-list job-list">
+              {jobs.data.map((job) => (
+                <li key={job.id}>
+                  <div className="job-heading">
+                    <GitPullRequest size={16} aria-hidden="true" />
+                    {githubUrl ? (
+                      <a className="text-link" href={`${githubUrl}/pull/${job.pull_number}`}>
+                        PR #{job.pull_number}
+                      </a>
+                    ) : (
+                      <>PR #{job.pull_number}</>
+                    )}
+                    {" · "}
+                    <code title={job.head_sha}>{job.head_sha.slice(0, 12)}</code>
+                    {" · "}
+                    <strong className="neutral-pill">{jobStatus(job.status, job.scan_id)}</strong>
+                    {" · Attempt "}
+                    {job.attempts}
+                  </div>
+                  {job.status === "failed" && (
+                    <p className="form-error">
+                      This scan failed. Check the repository’s saved paths and release reference.{" "}
+                      <Link className="text-link" href="/help#troubleshooting">
+                        Troubleshooting
+                      </Link>
+                    </p>
+                  )}
+                  <p>
+                    GitHub Check{" · "}
+                    {(
+                      job.check_state ?? (job.check_id ? "legacy record" : "not recorded")
+                    ).replaceAll("_", " ")}
+                    {job.check_conclusion && ` · ${job.check_conclusion.replaceAll("_", " ")}`}
+                    {githubUrl && job.check_id && (
+                      <>
+                        {" · "}
+                        <a className="text-link" href={`${githubUrl}/runs/${job.check_id}`}>
+                          Open Check
+                        </a>
+                      </>
+                    )}
+                  </p>
+                  {job.check_error && (
+                    <p className="form-error">
+                      {checkMessages[job.check_error] ?? "Check publication needs review."}
+                    </p>
+                  )}
+                  {job.scan_id && (
+                    <Link
+                      className="text-link"
+                      href={`/team/repositories/${repo.id}?scan=${job.scan_id}`}
+                    >
+                      Open saved report
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
       {canWrite && (
         <section className="dashboard-card team-card">
           <h2>Import a Git scan</h2>
@@ -155,22 +229,23 @@ export default async function RepositoryPage({
           <UploadScan repositoryId={repo.id} />
         </section>
       )}
-      <section className="dashboard-card table-card">
+      <section className="dashboard-card table-card" id="scan-history">
         <div className="card-title">
           <div>
             <h2>Persistent scan history</h2>
             <p>Reports saved for this repository</p>
           </div>
         </div>
-        <div className="table-scroll">
-          <table>
+        <section className="table-scroll" aria-label="Saved scan history">
+          {/* biome-ignore lint/a11y/noNoninteractiveTabindex: The focusable table supports keyboard scrolling on narrow screens. */}
+          <table className="scan-history" tabIndex={0}>
             <thead>
               <tr>
-                <th>Saved</th>
-                <th>Previous</th>
-                <th>Proposed</th>
-                <th>Findings</th>
-                <th>Status</th>
+                <th scope="col">Saved</th>
+                <th scope="col">Previous</th>
+                <th scope="col">Proposed</th>
+                <th scope="col">Findings</th>
+                <th scope="col">Compatibility verdict</th>
               </tr>
             </thead>
             <tbody>
@@ -180,8 +255,13 @@ export default async function RepositoryPage({
                     <Link
                       className="text-link"
                       href={`/team/repositories/${repo.id}?scan=${scan.id}`}
+                      prefetch={false}
+                      aria-current={
+                        selectedId.success && selectedId.data === scan.id ? "page" : undefined
+                      }
                     >
                       {new Date(scan.created_at).toLocaleString()}
+                      <NavigationStatus />
                     </Link>
                   </td>
                   <td>
@@ -191,15 +271,17 @@ export default async function RepositoryPage({
                     <code>{scan.proposed_sha.slice(0, 12)}</code>
                   </td>
                   <td>{scan.finding_count}</td>
-                  <td>{scan.status.replaceAll("_", " ")}</td>
+                  <td>{verdictLabel(scan.status)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
         {!history?.scans.length && (
           <p className="compatibility-note">
-            {history ? "No saved scans on this page." : "Scan history is temporarily unavailable."}
+            {history
+              ? "No saved scans on this page. A report appears when processing finishes or someone imports a CLI scan."
+              : "Scan history is temporarily unavailable. Reload this page to retry."}
           </p>
         )}
         {history?.next && (
@@ -215,30 +297,13 @@ export default async function RepositoryPage({
       </section>
       {search.scan && !report?.success && (
         <p className="form-error" role="alert">
-          The selected report is unavailable.
+          {selected?.error
+            ? "The selected report couldn’t be loaded. Reload this page to retry."
+            : "This report is unavailable. Select another saved report from the history above."}
         </p>
       )}
       {report?.success && selected?.data && (
         <>
-          <nav className="inline-form" aria-label="Export saved report">
-            <a
-              className="button secondary compact"
-              href={`/api/scans/${selected.data.id}?format=json`}
-            >
-              Download JSON
-            </a>
-            <a
-              className="button secondary compact"
-              href={`/api/scans/${selected.data.id}?format=sarif`}
-            >
-              Download SARIF
-            </a>
-          </nav>
-          <CompatibilityPanel
-            report={report.data}
-            imported={!selectedJob?.data}
-            github={!!selectedJob?.data}
-          />
           <section className="dashboard-card team-card">
             <h2>Scan review</h2>
             <p>{review?.data ? review.data.decision.replaceAll("_", " ") : "Awaiting review"}</p>
@@ -258,9 +323,7 @@ export default async function RepositoryPage({
                     <option value="needs_review">Needs review</option>
                   </select>
                 </label>
-                <button className="button secondary compact" type="submit">
-                  Save review
-                </button>
+                <SubmitButton className="button secondary compact">Save review</SubmitButton>
               </form>
             )}
           </section>

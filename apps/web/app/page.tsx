@@ -1,5 +1,4 @@
 import {
-  ArrowDown,
   ArrowRight,
   Braces,
   CircleHelp,
@@ -21,46 +20,21 @@ import { getDemo } from "@/lib/demo";
 const steps = [
   {
     icon: FileCode2,
-    title: "Select a migration",
+    title: "Connect a repository",
     detail:
-      "Analyze SQL files locally or compare changed migrations against a baseline in GitHub Actions.",
+      "Choose the repositories RollbackIQ can access, then set your migration paths and previous release.",
   },
   {
     icon: ScanLine,
     title: "Inspect the schema changes",
     detail:
-      "PostgreSQL’s parser identifies destructive DDL, constraint changes, and statements that need manual review.",
+      "Compare proposed PostgreSQL changes with queries from the previous release and review gaps in coverage.",
   },
   {
     icon: GitPullRequest,
     title: "Review before you merge",
     detail:
-      "Open the rule evidence, test rollback assumptions, and enforce a severity threshold in CI.",
-  },
-];
-
-const plans = [
-  {
-    name: "Community",
-    price: "Free",
-    detail: "Local PostgreSQL CLI, basic rules and JSON reports.",
-  },
-  {
-    name: "Startup",
-    price: "₹1,999",
-    term: "/ month",
-    detail: "Hosted dashboard, scan history and AI explanations.",
-  },
-  {
-    name: "Business",
-    price: "₹5,999",
-    term: "/ month",
-    detail: "Team approvals, advanced policies and audit history.",
-  },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    detail: "Private deployments, enterprise authentication and governance.",
+      "Inspect the evidence, share JSON or SARIF, and apply a severity policy to GitHub Checks.",
   },
 ];
 
@@ -70,20 +44,23 @@ export default async function Home() {
   return (
     <div className="marketing">
       <header className="site-header">
+        <a className="skip-link" href="#main-content">
+          Skip to content
+        </a>
         <div className="site-nav container">
           <Brand />
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
-            <a href="#integration">GitHub Actions</a>
-            <a href="#pricing">Pricing</a>
+            <a href="#integration">GitHub</a>
+            <Link href="/help">Help</Link>
           </nav>
-          <Link className="button secondary compact" href="/workspace">
-            Open workspace <ArrowRight size={15} />
+          <Link className="button secondary compact" href="/team">
+            Team workspace <ArrowRight size={15} aria-hidden="true" />
           </Link>
         </div>
       </header>
 
-      <main>
+      <main id="main-content">
         <section className="hero">
           <div className="hero-grid" aria-hidden="true" />
           <div className="container hero-inner">
@@ -91,28 +68,27 @@ export default async function Home() {
               <Database size={13} /> PostgreSQL migration analysis
             </span>
             <h1>
-              Deploy With Confidence.
-              <br />
-              <span>Roll Back With Evidence.</span>
+              Catch migration risks <br />
+              <span>before you deploy.</span>
             </h1>
             <p>
-              Detect database migration hazards and application
-              <br className="desktop-break" /> compatibility risks before your next release.
+              Compare PostgreSQL migrations with the application queries in your previous release.
+              See what could break and where to investigate before you merge.
             </p>
             <div className="hero-actions">
-              <Link className="button primary" href="/workspace">
-                Start Free <ArrowRight size={17} />
+              <Link className="button primary" href="/auth?mode=signup">
+                Create an account <ArrowRight size={17} aria-hidden="true" />
               </Link>
-              <a className="button secondary" href="#platform">
-                Explore the Platform <ArrowDown size={16} />
-              </a>
+              <Link className="button secondary" href="/workspace/demo">
+                Try the sample report
+              </Link>
             </div>
             <div className="hero-integrations">
-              <Database size={14} /> PostgreSQL <span /> <Github size={14} /> GitHub Actions{" "}
-              <span /> <Braces size={14} /> JSON &amp; SARIF
+              <Database size={14} /> PostgreSQL <span /> <Github size={14} /> GitHub Checks <span />{" "}
+              <Braces size={14} /> JSON &amp; SARIF
             </div>
           </div>
-          <div className="container preview-container" id="platform">
+          <div className="container preview-container">
             <div className="app-preview">
               <div className="preview-bar">
                 <div className="window-dots" aria-hidden="true">
@@ -121,7 +97,7 @@ export default async function Home() {
                   <i />
                 </div>
                 <span>ROLLBACKIQ / RELEASE PREFLIGHT</span>
-                <span className="demo-dot">Demo workspace</span>
+                <span className="demo-dot">Sample data</span>
               </div>
               <div className="preview-body">
                 <div className="preview-nav" aria-hidden="true">
@@ -222,9 +198,12 @@ export default async function Home() {
               Compare migration files with a Git baseline. RollbackIQ reports source locations,
               produces SARIF and applies your policy in GitHub Actions.
             </p>
-            <p>Connect the GitHub App to save pull-request scans in your team workspace.</p>
-            <Link className="button secondary compact" href="/team/github">
-              Connect GitHub
+            <p>
+              For a shared history, connect the GitHub App in your team workspace. Eligible pull
+              request events queue scans, and completed reports appear in the repository’s history.
+            </p>
+            <Link className="button secondary compact" href="/help#github-checks">
+              Learn about GitHub Checks
             </Link>
             <Link className="text-link" href="/workspace/demo">
               Inspect a sample report <ArrowRight size={15} />
@@ -240,30 +219,6 @@ export default async function Home() {
                 prisma/migrations \{"\n"} --fail-on high --fail-incomplete
               </code>
             </pre>
-          </div>
-        </section>
-
-        <section className="container section" id="pricing">
-          <div className="section-intro">
-            <span className="eyebrow mono">PRICING</span>
-            <h2>Start with the local scanner.</h2>
-            <p>Proposed hosted pricing. Community scanning is available in this build.</p>
-          </div>
-          <div className="plan-grid">
-            {plans.map(({ name, price, term, detail }) => (
-              <article className="marketing-card" key={name}>
-                <h3>{name}</h3>
-                <strong>
-                  {price} <small>{term}</small>
-                </strong>
-                <p>{detail}</p>
-                {name === "Community" && (
-                  <Link className="text-link" href="/workspace">
-                    Try the scanner <ArrowRight size={14} />
-                  </Link>
-                )}
-              </article>
-            ))}
           </div>
         </section>
 
@@ -292,16 +247,24 @@ export default async function Home() {
               workspace keeps scan history in memory for this browser tab.
             </p>
           </details>
+          <details>
+            <summary>Where do I see my scan?</summary>
+            <p>
+              Open your repository in Team workspace. GitHub jobs show the recorded processing
+              status, and completed jobs link to saved reports when available.
+            </p>
+          </details>
         </section>
       </main>
 
       <footer className="site-footer">
         <div className="container">
           <Brand />
-          <p>Know Your Rollback Risk Before You Deploy.</p>
-          <Link href="/workspace">
-            Open workspace <ArrowRight size={15} />
-          </Link>
+          <nav className="product-nav" aria-label="Footer">
+            <Link href="/help">Help center</Link>
+            <Link href="/workspace">Local scanner</Link>
+            <Link href="/auth">Sign in</Link>
+          </nav>
         </div>
       </footer>
     </div>

@@ -1,17 +1,27 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Brand } from "@/components/brand";
+import { SubmitButton } from "@/components/submit-button";
 import { supabaseSettings } from "@/lib/supabase/config";
 import { supabaseIdentity } from "@/lib/supabase/server";
 import { requestReset, resetPassword, submitCredentials } from "./actions";
 
+export const metadata: Metadata = {
+  title: "Account",
+  robots: { index: false, follow: false },
+};
+
 const notices: Record<string, string> = {
   invalid: "Check the email and password fields. Passwords must have at least eight characters.",
   credentials: "Sign-in failed. Verify your email and password and try again.",
-  unavailable: "The request could not complete. Try again shortly.",
-  verify: "Check your email to verify your account.",
+  unavailable: "The request could not complete. Check your connection and try again shortly.",
+  "slow-down": "Too many requests. Wait a moment before trying again.",
+  verify:
+    "Check your inbox for the verification email. Open the link, then return here to sign in.",
   "reset-sent": "If this email can receive a recovery link, check your inbox.",
-  link: "The link could not be verified. Request a new sign-in or recovery link.",
+  link: "This link is invalid or expired. Sign in again, or request a new password reset link.",
+  unconfigured: "Team sign-in is temporarily unavailable.",
 };
 
 export default async function AuthPage({
@@ -20,7 +30,10 @@ export default async function AuthPage({
   searchParams: Promise<{ mode?: string; notice?: string }>;
 }) {
   const params = await searchParams;
-  const mode = ["signup", "forgot", "reset"].includes(params.mode ?? "") ? params.mode : "login";
+  const mode =
+    params.mode === "signup" || params.mode === "forgot" || params.mode === "reset"
+      ? params.mode
+      : "login";
   const title =
     mode === "signup"
       ? "Create an account"
@@ -33,11 +46,29 @@ export default async function AuthPage({
   if (configured && mode === "reset" && !(await supabaseIdentity())) redirect("/auth?notice=link");
   const notice =
     params.notice && Object.hasOwn(notices, params.notice) ? notices[params.notice] : null;
+  const informational = params.notice === "verify" || params.notice === "reset-sent";
   return (
-    <main className="container auth-layout">
-      <Brand />
+    <main className="container auth-layout" id="main-content">
+      <header className="team-header">
+        <Brand />
+        <Link className="text-link" href="/help">
+          Help
+        </Link>
+      </header>
       <section className="dashboard-card auth-card">
         <h1>{title}</h1>
+        {configured && (
+          <p>
+            {
+              {
+                login: "Open your team workspace and saved scan reports.",
+                signup: "Create your RollbackIQ account, then set up your team’s first repository.",
+                forgot: "Enter your account email to request a password reset link.",
+                reset: "Enter and confirm a new password for your account.",
+              }[mode]
+            }
+          </p>
+        )}
         {!configured ? (
           <>
             <p>Team authentication is available after Supabase is configured.</p>
@@ -48,8 +79,15 @@ export default async function AuthPage({
         ) : (
           <>
             {notice && (
-              <p className="auth-notice" role="status">
-                {notice}
+              <p
+                className={informational ? "auth-notice" : "form-error"}
+                role={informational ? "status" : "alert"}
+              >
+                {params.notice === "invalid" && mode === "forgot"
+                  ? "Enter a valid email address."
+                  : params.notice === "invalid" && mode === "reset"
+                    ? "Use matching passwords with at least eight characters."
+                    : notice}
               </p>
             )}
             <form
@@ -82,6 +120,12 @@ export default async function AuthPage({
                   />
                 </label>
               )}
+              {mode === "signup" && (
+                <p>
+                  Use at least eight characters. If email verification is required, check your inbox
+                  before signing in.
+                </p>
+              )}
               {mode === "reset" && (
                 <label>
                   Confirm password
@@ -95,18 +139,21 @@ export default async function AuthPage({
                   />
                 </label>
               )}
-              <button className="button primary" type="submit">
+              <SubmitButton
+                className="button primary"
+                pendingLabel={mode === "login" ? "Signing in…" : "Submitting…"}
+              >
                 {mode === "forgot"
                   ? "Send reset link"
                   : mode === "reset"
                     ? "Update password"
                     : title}
-              </button>
+              </SubmitButton>
             </form>
             <div className="auth-links">
-              <Link href="/auth">Sign in</Link>
-              <Link href="/auth?mode=signup">Create account</Link>
-              <Link href="/auth?mode=forgot">Forgot password</Link>
+              {mode !== "login" && <Link href="/auth">Sign in</Link>}
+              {mode !== "signup" && <Link href="/auth?mode=signup">Create account</Link>}
+              {mode !== "forgot" && <Link href="/auth?mode=forgot">Forgot password</Link>}
             </div>
           </>
         )}

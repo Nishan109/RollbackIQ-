@@ -11,8 +11,15 @@ export async function createOrganization(form: FormData) {
   const value = name(100).safeParse(form.get("name"));
   if (!value.success) redirect("/team?notice=invalid");
   const { client } = await requireIdentity();
-  const { error } = await client.rpc("rollbackiq_create_organization", { p_name: value.data });
-  redirect(error ? "/team?notice=failed" : "/team?notice=organization");
+  const { data, error } = await client.rpc("rollbackiq_create_organization", {
+    p_name: value.data,
+  });
+  const id = idSchema.safeParse(data);
+  redirect(
+    error || !id.success
+      ? "/team?notice=failed"
+      : `/team?organization=${id.data}&notice=organization`,
+  );
 }
 
 export async function addRepository(form: FormData) {
@@ -43,7 +50,7 @@ export async function setMember(form: FormData) {
     p_user_id: value.data.user,
     p_role: value.data.role,
   });
-  redirect(error ? "/team?notice=failed" : "/team?notice=membership");
+  redirect(`/team?organization=${value.data.org}&notice=${error ? "failed" : "membership"}`);
 }
 
 export async function reviewScan(form: FormData) {

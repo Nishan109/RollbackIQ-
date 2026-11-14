@@ -1,5 +1,4 @@
-"use client";
-import { useState } from "react";
+import { PostForm } from "@/components/post-form";
 export function ConnectButton({
   organization,
   installation,
@@ -9,15 +8,16 @@ export function ConnectButton({
   installation?: number;
   label?: string;
 }) {
-  const [connecting, setConnecting] = useState(false);
   const buttonLabel = label ?? (installation ? "Refresh access" : "Connect GitHub");
   return (
-    <form action="/api/github/connect" method="post" onSubmit={() => setConnecting(true)}>
+    <PostForm
+      action="/api/github/connect"
+      label={buttonLabel}
+      pendingLabel="Opening GitHub…"
+      variant="primary"
+    >
       <input type="hidden" name="organization" value={organization} />
       {installation && <input type="hidden" name="installation" value={installation} />}
-      <button type="submit" disabled={connecting} className="button primary compact">
-        {connecting ? "Connecting…" : buttonLabel}
-      </button>
-    </form>
+    </PostForm>
   );
 }
