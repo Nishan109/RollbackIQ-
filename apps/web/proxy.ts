@@ -25,5 +25,11 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/team/:path*", "/auth", "/api/scans/:path*", "/api/github/((?!webhook).*)"],
+  matcher: [
+    "/workspace",
+    "/team/:path*",
+    "/auth",
+    "/api/scans/:path*",
+    "/api/github/((?!webhook).*)",
+  ],
 };

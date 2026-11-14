@@ -129,6 +129,35 @@ test("GitHub authorization binds single-use state, uses PKCE and validates cooki
       return { organization: state.organization };
     };
     const flow = await beginAuthorization(store, new Github(), actor, organization, 42);
+    const discovery = await beginAuthorization(
+      store,
+      new Github(),
+      actor,
+      organization,
+      undefined,
+      "oauth",
+    );
+    const discoveryUrl = new URL(discovery.url);
+    assert.equal(
+      discoveryUrl.origin + discoveryUrl.pathname,
+      "https://github.com/login/oauth/authorize",
+    );
+    assert.equal(
+      discoveryUrl.searchParams.get("redirect_uri"),
+      "http://localhost:3000/api/github/callback",
+    );
+    assert.equal(
+      discoveryUrl.searchParams.get("code_challenge"),
+      pkceChallenge(discovery.cookie.verifier),
+    );
+    assert.equal(discovery.cookie.installation, undefined);
+    await consumeAuthorization(
+      store,
+      actor,
+      JSON.stringify(discovery.cookie),
+      discovery.cookie.state,
+      "oauth",
+    );
     const url = new URL(flow.url);
     assert.equal(url.searchParams.get("code_challenge"), pkceChallenge(flow.cookie.verifier));
     assert.equal(url.searchParams.get("code_challenge_method"), "S256");
@@ -218,6 +247,8 @@ test("GitHub JWT and user authorization enforce App identity and repository admi
       calls.push({ url, body: init?.body?.toString() });
       assert.match(url, /^https:\/\/(api\.)?github\.com\//);
       if (url.includes("access_token")) return Response.json({ access_token: "user-token" });
+      if (url.includes("/user/installations?"))
+        return Response.json({ total_count: 1, installations: [{ id: 42 }] });
       if (url.includes("/user/installations/42/repositories"))
         return Response.json({
           total_count: 2,
@@ -247,6 +278,10 @@ test("GitHub JWT and user authorization enforce App identity and repository admi
       true,
     );
     const result = await provider.authorizedChoices("user-token", 42);
+    assert.deepEqual(await provider.userInstallations("user-token"), {
+      total_count: 1,
+      installations: [{ id: 42 }],
+    });
     assert.deepEqual(
       result.repositories.map((r) => r.id),
       [10],

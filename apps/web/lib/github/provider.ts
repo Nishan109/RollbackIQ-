@@ -113,6 +113,14 @@ export class Github {
       throw new Error("Installation is unavailable");
     return value;
   }
+  async userInstallations(token: string) {
+    return z
+      .object({
+        total_count: z.number().int().nonnegative(),
+        installations: z.array(z.object({ id: githubId })).max(100),
+      })
+      .parse(await this.request("/user/installations?per_page=100", token));
+  }
   async token(id: number, repositoryId?: number) {
     return z
       .object({ token: z.string().min(1), expires_at: z.string() })

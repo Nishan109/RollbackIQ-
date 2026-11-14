@@ -10,6 +10,7 @@ export function PostForm({
   pendingLabel = "Saving…",
   variant = "secondary",
   disabled = false,
+  newTab = false,
 }: {
   action: string;
   className?: string;
@@ -18,6 +19,7 @@ export function PostForm({
   pendingLabel?: string;
   variant?: "primary" | "secondary";
   disabled?: boolean;
+  newTab?: boolean;
 }) {
   const submitted = useRef(false);
   const [pending, setPending] = useState(false);
@@ -27,8 +29,12 @@ export function PostForm({
       setPending(false);
     }
     window.addEventListener("pageshow", onPageShow);
-    return () => window.removeEventListener("pageshow", onPageShow);
-  }, []);
+    if (newTab) window.addEventListener("focus", onPageShow);
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("focus", onPageShow);
+    };
+  }, [newTab]);
   function submit(event: FormEvent<HTMLFormElement>) {
     if (submitted.current) {
       event.preventDefault();
@@ -38,7 +44,14 @@ export function PostForm({
     setPending(true);
   }
   return (
-    <form action={action} method="post" className={className} onSubmit={submit}>
+    <form
+      action={action}
+      method="post"
+      className={className}
+      onSubmit={submit}
+      target={newTab ? "_blank" : undefined}
+      rel={newTab ? "noopener" : undefined}
+    >
       {children}
       <button
         type="submit"
@@ -47,6 +60,7 @@ export function PostForm({
         className={`button ${variant} compact`}
       >
         {pending ? pendingLabel : label}
+        {newTab && <span className="screen-reader"> (opens in a new tab)</span>}
       </button>
       <span className="screen-reader" role="status">
         {pending ? pendingLabel : ""}

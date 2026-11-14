@@ -38,8 +38,15 @@ export async function submitCredentials(form: FormData) {
     password: password.data,
     options: { emailRedirectTo: `${appOrigin()}/auth/callback` },
   });
-  if (error)
-    redirect(`/auth?mode=signup&notice=${error.status === 429 ? "slow-down" : "unavailable"}`);
+  if (error) {
+    const notice =
+      error.status === 429
+        ? "slow-down"
+        : process.env.ROLLBACKIQ_LOCAL_PREVIEW === "1" && error.code === "user_already_exists"
+          ? "preview-account-exists"
+          : "unavailable";
+    redirect(`/auth?mode=signup&notice=${notice}`);
+  }
   redirect(data.session ? "/team" : "/auth?notice=verify");
 }
 

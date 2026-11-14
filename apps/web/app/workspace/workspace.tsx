@@ -1,6 +1,6 @@
 "use client";
 
-import type { Finding, MigrationFile, ScanReport, Severity } from "@rollbackiq/scanner-core";
+import type { Finding, ScanReport, Severity } from "@rollbackiq/scanner-core";
 import type { CompatibilityReport } from "@rollbackiq/scanner-core/compatibility/contracts";
 import {
   ArrowDownToLine,
@@ -10,10 +10,8 @@ import {
   CircleHelp,
   Database,
   FileCode2,
-  History,
   GitCompareArrows,
-  Upload,
-  UsersRound,
+  History,
   LayoutDashboard,
   LoaderCircle,
   PanelLeftClose,
@@ -21,15 +19,23 @@ import {
   ScanLine,
   Search,
   ShieldAlert,
+  Upload,
+  UsersRound,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { type ChangeEvent, type FormEvent, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import { Brand } from "@/components/brand";
 import { CompatibilityBadge, CompatibilityPanel } from "@/components/compatibility-panel";
-import { migrationSummary, parseCompatibilityReport } from "@/lib/compatibility-report";
 import { CoverageBadge, SeverityBadge } from "@/components/report-ui";
+import { migrationSummary, parseCompatibilityReport } from "@/lib/compatibility-report";
 import type { DemoSample } from "@/lib/demo";
+import {
+  type WorkspaceRun as Run,
+  type SavedDashboard,
+  savedWorkspaceRun,
+  workspaceHistory,
+} from "@/lib/workspace-reports";
 
 const views = [
   { name: "Overview", icon: LayoutDashboard },
@@ -40,17 +46,6 @@ const views = [
 ] as const;
 type View = (typeof views)[number]["name"];
 const severityOrder: Severity[] = ["critical", "high", "medium", "low", "info"];
-
-type Run = {
-  id: string;
-  origin: "demo" | "sql" | "import";
-  label: string;
-  report: ScanReport;
-  files: MigrationFile[];
-  time: number | null;
-  durationMs: number | null;
-  compatibility?: CompatibilityReport;
-};
 
 type DemoData = { samples: DemoSample[]; report: ScanReport; compatibility: CompatibilityReport };
 
@@ -174,7 +169,7 @@ function FindingTable({
   );
 }
 
-export function Workspace({ demo }: { demo?: DemoData }) {
+export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashboard }) {
   const [view, setView] = useState<View>("Overview");
   const [collapsed, setCollapsed] = useState(false);
   const [runs, setRuns] = useState<Run[]>(() =>
@@ -193,7 +188,10 @@ export function Workspace({ demo }: { demo?: DemoData }) {
         ]
       : [],
   );
-  const [runId, setRunId] = useState(demo ? "demo" : "");
+  const [runId, setRunId] = useState(
+    demo ? "demo" : (saved?.selectedId ?? saved?.scans[0]?.id ?? ""),
+  );
+  const [savedError, setSavedError] = useState<{ id: string; message: string } | null>(null);
   const [selectedPath, setSelectedPath] = useState("");
   const [severity, setSeverity] = useState<Severity | "all">("all");
   const [search, setSearch] = useState("");
@@ -210,7 +208,40 @@ export function Workspace({ demo }: { demo?: DemoData }) {
   const findingDialog = useRef<HTMLDialogElement>(null);
   const activeScan = useRef<AbortController | null>(null);
 
-  const run = runs.find(({ id }) => id === runId) ?? runs[0];
+  const run = runs.find(({ id }) => id === runId);
+  const selectedSaved = saved?.scans.find(({ id }) => id === runId);
+  const savedFailure = savedError?.id === runId ? savedError.message : null;
+  const loadingSaved = !!selectedSaved && !run && !savedFailure;
+  const history = workspaceHistory(runs, saved?.scans ?? []);
+  const workspaceName = demo ? "Demo workspace" : saved ? "Your dashboard" : "Local workspace";
+
+  useEffect(() => {
+    if (!selectedSaved || run || savedFailure) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/scans/${selectedSaved.id}`, {
+          cache: "no-store",
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        });
+        if (!response.ok) throw new Error("The saved report request failed.");
+        const item = savedWorkspaceRun(selectedSaved, await response.json());
+        if (!controller.signal.aborted)
+          setRuns((previous) =>
+            [item, ...previous.filter(({ id }) => id !== item.id)].slice(0, 20),
+          );
+      } catch {
+        if (!controller.signal.aborted)
+          setSavedError({
+            id: selectedSaved.id,
+            message:
+              "This saved report could not be loaded. Open Team workspace to check your access, or try again.",
+          });
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedSaved, run, savedFailure]);
+
   const report = run?.report;
   const selectedFile = report?.files.find(({ path }) => path === selectedPath) ?? report?.files[0];
   const fileSql = run?.files.find(({ path }) => path === selectedFile?.path)?.sql ?? "";
@@ -227,7 +258,12 @@ export function Workspace({ demo }: { demo?: DemoData }) {
     ) ?? [];
   const metrics = report
     ? [
-        { label: "Scans this session", value: runs.length, icon: History, tone: "violet" },
+        {
+          label: saved ? "Reports available" : "Scans this session",
+          value: history.length,
+          icon: History,
+          tone: "violet",
+        },
         {
           label: "Migrations analyzed",
           value: report.summary.files,
@@ -267,10 +303,15 @@ export function Workspace({ demo }: { demo?: DemoData }) {
     findingDialog.current?.showModal();
   }
 
-  function openRun(item: Run) {
+  function openRun(item: { id: string }) {
     setRunId(item.id);
     setSelectedPath("");
     setView("Overview");
+    if (saved?.scans.some(({ id }) => id === item.id)) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("scan", item.id);
+      window.history.replaceState(window.history.state, "", url);
+    }
   }
 
   async function importReport(event: ChangeEvent<HTMLInputElement>) {
@@ -381,8 +422,10 @@ export function Workspace({ demo }: { demo?: DemoData }) {
         <div className="workspace-identity">
           <span className="workspace-avatar">{demo ? "AC" : <Database size={15} />}</span>
           <div>
-            <strong>{demo ? "Acme Commerce" : "Local workspace"}</strong>
-            <small>{demo ? "Demo workspace" : "Reports in this tab"}</small>
+            <strong>{demo ? "Acme Commerce" : workspaceName}</strong>
+            <small>
+              {demo ? "Demo workspace" : saved ? "Saved team reports" : "Reports in this tab"}
+            </small>
           </div>
         </div>
         <nav className="sidebar-nav" aria-label="Workspace navigation">
@@ -454,11 +497,31 @@ export function Workspace({ demo }: { demo?: DemoData }) {
               {reportError}
             </p>
           )}
+          {saved?.unavailable && (
+            <p className="form-error" role="alert">
+              Saved report history is temporarily unavailable. Reload this page to retry or open{" "}
+              <Link href="/team">Team workspace</Link>.
+            </p>
+          )}
+          {savedFailure && (
+            <div className="form-error" role="alert">
+              <p>{savedFailure}</p>
+              <button
+                type="button"
+                className="button secondary compact"
+                onClick={() => {
+                  setSavedError(null);
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
           <div className="dashboard-heading">
             <div>
               <div className="workspace-context">
                 <Database size={14} /> PostgreSQL <span />{" "}
-                <span className="demo-dot">{demo ? "Demo workspace" : "Local workspace"}</span>
+                <span className="demo-dot">{workspaceName}</span>
                 <Link
                   className="workspace-mode-link"
                   href={demo ? "/workspace" : "/workspace/demo"}
@@ -466,7 +529,7 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                   {demo ? "Open local workspace" : "View demo"}
                 </Link>
               </div>
-              <h1>{view === "Overview" ? (run ? "Release overview" : "Local workspace") : view}</h1>
+              <h1>{view === "Overview" ? (run ? "Release overview" : workspaceName) : view}</h1>
               {run && (
                 <p>
                   {view === "Overview"
@@ -477,7 +540,9 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                         ? "Review deterministic findings for the selected scan."
                         : view === "Compatibility"
                           ? "Review evidence from a Git release comparison."
-                          : "Open reports from scans in this browser tab."}
+                          : saved
+                            ? "Open your saved reports and scans from this browser tab."
+                            : "Open reports from scans in this browser tab."}
                 </p>
               )}
             </div>
@@ -492,7 +557,13 @@ export function Workspace({ demo }: { demo?: DemoData }) {
             )}
           </div>
 
-          {!run && (
+          {loadingSaved && (
+            <section className="dashboard-card empty" role="status">
+              <LoaderCircle size={22} className="spin" aria-hidden="true" />
+              <p>Loading your saved report…</p>
+            </section>
+          )}
+          {!run && !loadingSaved && !savedFailure && !saved?.unavailable && (
             <section
               className="dashboard-card workspace-empty"
               aria-labelledby="workspace-empty-title"
@@ -502,14 +573,25 @@ export function Workspace({ demo }: { demo?: DemoData }) {
               </span>
               <h2 id="workspace-empty-title">No reports yet</h2>
               <p>
-                Use <strong>New scan</strong> to analyze your PostgreSQL migration, or use{" "}
-                <strong>Import report</strong> to open a compatibility report from your Git
-                repository.
+                {saved ? (
+                  <>
+                    Connect a repository in <Link href="/team">Team workspace</Link>. Completed
+                    GitHub scans appear here automatically and reload when you return.
+                  </>
+                ) : (
+                  <>
+                    Use <strong>New scan</strong> to analyze your PostgreSQL migration, or use{" "}
+                    <strong>Import report</strong> to open a compatibility report from your Git
+                    repository.
+                  </>
+                )}
               </p>
-              <p>
-                Run <code>pnpm compatibility --help</code> from the RollbackIQ folder for Git
-                comparison options.
-              </p>
+              {!saved && (
+                <p>
+                  Run <code>pnpm compatibility --help</code> from the RollbackIQ folder for Git
+                  comparison options.
+                </p>
+              )}
             </section>
           )}
 
@@ -757,6 +839,7 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                 <CompatibilityPanel
                   report={run.compatibility}
                   imported={run.origin === "import"}
+                  saved={run.origin === "saved"}
                   onOpenMigration={showMigration}
                 />
               )}
@@ -769,6 +852,7 @@ export function Workspace({ demo }: { demo?: DemoData }) {
               <CompatibilityPanel
                 report={run.compatibility}
                 imported={run.origin === "import"}
+                saved={run.origin === "saved"}
                 onOpenMigration={showMigration}
               />
             ) : (
@@ -779,15 +863,22 @@ export function Workspace({ demo }: { demo?: DemoData }) {
               </section>
             ))}
 
-          {view === "Scan history" && run && (
+          {view === "Scan history" && history.length > 0 && (
             <section className="dashboard-card table-card">
               <div className="card-title">
                 <div>
-                  <h2>Session scans</h2>
+                  <h2>{saved ? "Saved reports and session scans" : "Session scans"}</h2>
                   <p>
-                    Showing the last {runs.length} {runs.length === 1 ? "scan" : "scans"}. History
-                    clears on refresh.
+                    {saved
+                      ? "Saved reports reload automatically. Manual scans and file imports stay in this browser tab."
+                      : `Showing the last ${runs.length} ${runs.length === 1 ? "scan" : "scans"}. History clears on refresh.`}
                   </p>
+                  {saved?.more && (
+                    <p>
+                      Showing recent saved reports. Open <Link href="/team">Team workspace</Link>{" "}
+                      for repository history.
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="table-scroll">
@@ -803,7 +894,7 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.map((item) => (
+                    {history.map((item) => (
                       <tr key={item.id}>
                         <td>
                           <button
@@ -814,22 +905,14 @@ export function Workspace({ demo }: { demo?: DemoData }) {
                             {item.label}
                           </button>
                         </td>
+                        <td>{item.trigger}</td>
+                        <td>{item.findings}</td>
                         <td>
-                          {item.origin === "import"
-                            ? "Report import"
-                            : item.id === "demo"
-                              ? "Demo load"
-                              : item.origin === "demo"
-                                ? "Demo scan"
-                                : "Manual"}
-                        </td>
-                        <td>{item.compatibility?.findings.length ?? item.report.findings.length}</td>
-                        <td>
-                          <CompatibilityBadge status={item.compatibility?.status ?? "unknown"} />
+                          <CompatibilityBadge status={item.status} />
                         </td>
                         <td>{item.durationMs === null ? "—" : `${item.durationMs} ms`}</td>
                         <td>
-                          {item.time ? new Date(item.time).toLocaleTimeString() : "Workspace load"}
+                          {item.time ? new Date(item.time).toLocaleString() : "Workspace load"}
                         </td>
                       </tr>
                     ))}

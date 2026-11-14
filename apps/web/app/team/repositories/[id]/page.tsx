@@ -110,6 +110,9 @@ export default async function RepositoryPage({
       {report?.success && selected?.data && (
         <div id="selected-report">
           <nav className="report-downloads" aria-label="Export saved report">
+            <Link className="button primary compact" href={`/workspace?scan=${selected.data.id}`}>
+              Open in dashboard
+            </Link>
             <a
               className="button secondary compact"
               href={`/api/scans/${selected.data.id}?format=json`}

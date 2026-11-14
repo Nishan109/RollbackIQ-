@@ -37,12 +37,14 @@ export function CompatibilityPanel({
   migrationPath,
   imported = false,
   github = false,
+  saved = false,
   onOpenMigration,
 }: {
   report: CompatibilityView;
   migrationPath?: string;
   imported?: boolean;
   github?: boolean;
+  saved?: boolean;
   onOpenMigration?: (path: string) => void;
 }) {
   const [confidence, setConfidence] = useState<EvidenceConfidence | "all">("all");
@@ -68,9 +70,11 @@ export function CompatibilityPanel({
             <code>{report.previous.ref}</code> → <code>{report.proposed.ref}</code>
             {github
               ? " · GitHub pull request scan"
-              : imported
-                ? " · Imported report"
-                : " · Synthetic demo releases"}
+              : saved
+                ? " · Saved report"
+                : imported
+                  ? " · Imported report"
+                  : " · Synthetic demo releases"}
           </p>
         </div>
         <GitCompareArrows size={18} />

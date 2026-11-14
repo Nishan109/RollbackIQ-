@@ -10,6 +10,7 @@ import { supabaseSettings } from "@/lib/supabase/config";
 import { requireIdentity } from "@/lib/supabase/server";
 import { canManageGitHub, setupProgress } from "@/lib/team-experience";
 import { ConnectButton } from "./connect-button";
+import { ConnectionRefresh } from "./connection-refresh";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "GitHub connections", robots: { index: false } };
@@ -40,6 +41,15 @@ const messages: Record<string, string> = {
     "Your GitHub organization must approve the installation. After approval, click Connect GitHub again.",
   cancelled: "GitHub authorization was cancelled. You can try again.",
   authorized: "Authorization verified. Select repositories below within five minutes.",
+  connected: "GitHub is connected. Your selected repositories are now available in Team workspace.",
+  installation_needed:
+    "GitHub found no accessible installations. Click Install GitHub App to install it, then select your repositories in RollbackIQ.",
+  choose_installation:
+    "GitHub found multiple installations. Under Already installed on GitHub?, enter the installation ID you want to use.",
+  installation_linked:
+    "This GitHub installation is already linked to another RollbackIQ organization. Sign in to that workspace to use the connection, or connect an installation from a different GitHub account here.",
+  authorization_failed:
+    "We could not verify GitHub authorization. Reopen Connect GitHub and finish authorization in the new tab.",
   saved: "Your changes were saved.",
   disconnected:
     "Disconnected in RollbackIQ. Your GitHub App installation and saved reports remain available.",
@@ -150,8 +160,23 @@ export default async function GithubPage({
     connections: dashboard.connections,
     repositories: dashboard.repositories,
   });
+  const connectionError = ["failed", "authorization_failed", "installation_linked"].includes(
+    query.notice ?? "",
+  );
   return (
     <main className="container team-layout product-team">
+      <ConnectionRefresh
+        organization={org}
+        notify={
+          query.notice === "connected" ||
+          query.notice === "disconnected" ||
+          query.notice === "saved"
+            ? query.notice
+            : query.notice === "authorized" && dashboard.choices
+              ? "authorized"
+              : undefined
+        }
+      />
       <header className="team-header">
         <Brand />
         <nav className="product-nav" aria-label="Workspace navigation">
@@ -164,14 +189,11 @@ export default async function GithubPage({
         </nav>
       </header>
       <h1>GitHub connections</h1>
-      <p>
-        Install the app, choose repositories you administer, then save the paths and release
-        reference for each scan.
-      </p>
+      <p>Authorize RollbackIQ in GitHub, then select the repositories you want to scan.</p>
       {query.notice && Object.hasOwn(messages, query.notice) && (
         <p
-          className={query.notice === "failed" ? "form-error" : "auth-notice"}
-          role={query.notice === "failed" ? "alert" : "status"}
+          className={connectionError ? "form-error" : "auth-notice"}
+          role={connectionError ? "alert" : "status"}
         >
           {messages[query.notice]}
         </p>
@@ -179,17 +201,21 @@ export default async function GithubPage({
       <section className="dashboard-card team-card">
         <h2>{progress.github ? "GitHub installations" : "Connect a GitHub installation"}</h2>
         <p>
-          GitHub will ask which repositories RollbackIQ can access. You must also have
-          administrative access to the repositories you connect here.
+          GitHub opens in a new tab. Installing the app grants access on GitHub. Select and save
+          repositories here to link the installation to this workspace.
         </p>
-        <ConnectButton organization={org} />
-        <details>
+        <div className="team-heading">
+          <ConnectButton organization={org} />
+          <ConnectButton organization={org} label="Install GitHub App" install />
+        </div>
+        <details open={query.notice === "choose_installation" ? true : undefined}>
           <summary>Already installed on GitHub?</summary>
           <PostForm
             action="/api/github/connect"
             className="scan-form"
             label="Continue with existing installation"
             pendingLabel="Opening GitHub…"
+            newTab
           >
             <input type="hidden" name="organization" value={org} />
             <label>

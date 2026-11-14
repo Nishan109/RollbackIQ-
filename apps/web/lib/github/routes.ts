@@ -7,9 +7,13 @@ import { githubReady, githubSettings } from "./config";
 import { choices, githubId, scanConfiguration } from "./contracts";
 import { Github } from "./provider";
 import { boundedBytes } from "./security";
-import { githubStore } from "./store";
+import { ensureInstallationAvailable, githubStore, InstallationAlreadyLinked } from "./store";
 
 const COOKIE = "rollbackiq-github";
+function githubPage(organization: string, notice: string) {
+  return `/team/github?organization=${organization}&notice=${notice}`;
+}
+
 function navigate(path: string) {
   return new Response(null, {
     status: 303,
@@ -68,6 +72,7 @@ export function githubPost(action: "connect" | "repositories" | "disconnect" | "
           identity.user.id,
           organization,
           id,
+          id || body.authorize === "on" ? "oauth" : "install",
         );
         await putCookie(flow.cookie);
         return navigate(flow.url);
@@ -128,12 +133,22 @@ export function githubPost(action: "connect" | "repositories" | "disconnect" | "
         });
       }
       return navigate(
-        `/team/github?organization=${organization}&notice=${action === "disconnect" ? "disconnected" : "saved"}`,
+        githubPage(
+          organization,
+          action === "repositories"
+            ? "connected"
+            : action === "disconnect"
+              ? "disconnected"
+              : "saved",
+        ),
       );
-    } catch {
+    } catch (error) {
       return navigate(
         organization
-          ? `/team/github?organization=${organization}&notice=failed`
+          ? githubPage(
+              organization,
+              error instanceof InstallationAlreadyLinked ? "installation_linked" : "failed",
+            )
           : "/team?notice=invalid",
       );
     }
@@ -143,6 +158,7 @@ export async function githubSetup(request: Request) {
   if (!githubReady()) return apiJson({ error: "GitHub App is unconfigured." }, 503);
   const identity = await supabaseIdentity();
   if (!identity) return navigate("/auth");
+  let organization: string | undefined;
   try {
     const params = new URL(request.url).searchParams;
     const store = githubStore();
@@ -153,9 +169,10 @@ export async function githubSetup(request: Request) {
       params.get("state"),
       "install",
     );
+    organization = flow.organization;
     await putCookie(null);
     if (params.get("setup_action") === "request")
-      return navigate(`/team/github?organization=${flow.organization}&notice=pending`);
+      return navigate(githubPage(organization, "pending"));
     const id = githubId.parse(Number(params.get("installation_id")));
     const next = await beginAuthorization(
       store,
@@ -168,13 +185,18 @@ export async function githubSetup(request: Request) {
     return navigate(next.url);
   } catch {
     await putCookie(null);
-    return navigate("/team?notice=github_failed");
+    return navigate(
+      organization
+        ? githubPage(organization, "authorization_failed")
+        : "/team?notice=github_failed",
+    );
   }
 }
 export async function githubCallback(request: Request) {
   if (!githubReady()) return apiJson({ error: "GitHub App is unconfigured." }, 503);
   const identity = await supabaseIdentity();
   if (!identity) return navigate("/auth");
+  let organization: string | undefined;
   try {
     const params = new URL(request.url).searchParams;
     const store = githubStore();
@@ -185,20 +207,41 @@ export async function githubCallback(request: Request) {
       params.get("state"),
       "oauth",
     );
+    organization = flow.organization;
     await putCookie(null);
-    if (params.has("error"))
-      return navigate(`/team/github?organization=${flow.organization}&notice=cancelled`);
+    if (params.has("error")) return navigate(githubPage(organization, "cancelled"));
     const code = z.string().min(1).max(512).parse(params.get("code"));
-    if (!flow.cookie.installation) throw new Error("Missing installation");
     const provider = new Github();
     const token = await provider.exchange(code, flow.cookie.verifier);
-    const payload = await provider.authorizedChoices(token, flow.cookie.installation);
+    let installation = flow.cookie.installation;
+    if (!installation) {
+      const available = await provider.userInstallations(token);
+      if (available.total_count === 0 && available.installations.length === 0)
+        return navigate(githubPage(organization, "installation_needed"));
+      const only = available.installations[0];
+      if (available.total_count !== 1 || available.installations.length !== 1 || !only)
+        return navigate(githubPage(organization, "choose_installation"));
+      installation = only.id;
+    }
+    const payload = await provider.authorizedChoices(token, installation);
+    // Check only after GitHub has verified the user's access. The selection RPC
+    // still enforces ownership atomically if two workspaces connect at once.
+    await ensureInstallationAvailable(installation, organization);
     // Only a five-minute, verified repository selection is persisted. The user
     // token and any refresh token are deliberately discarded after this request.
-    await store("choices", { actor: identity.user.id, organization: flow.organization, payload });
-    return navigate(`/team/github?organization=${flow.organization}&notice=authorized`);
-  } catch {
+    await store("choices", { actor: identity.user.id, organization, payload });
+    return navigate(githubPage(organization, "authorized"));
+  } catch (error) {
     await putCookie(null);
-    return navigate("/team?notice=github_failed");
+    return navigate(
+      organization
+        ? githubPage(
+            organization,
+            error instanceof InstallationAlreadyLinked
+              ? "installation_linked"
+              : "authorization_failed",
+          )
+        : "/team?notice=github_failed",
+    );
   }
 }

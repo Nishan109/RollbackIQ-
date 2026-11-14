@@ -3,10 +3,12 @@ export function ConnectButton({
   organization,
   installation,
   label,
+  install = false,
 }: {
   organization: string;
   installation?: number;
   label?: string;
+  install?: boolean;
 }) {
   const buttonLabel = label ?? (installation ? "Refresh access" : "Connect GitHub");
   return (
@@ -15,8 +17,10 @@ export function ConnectButton({
       label={buttonLabel}
       pendingLabel="Opening GitHub…"
       variant="primary"
+      newTab
     >
       <input type="hidden" name="organization" value={organization} />
+      {!install && <input type="hidden" name="authorize" value="on" />}
       {installation && <input type="hidden" name="installation" value={installation} />}
     </PostForm>
   );

@@ -1,17 +1,23 @@
 // Disposable Auth and PostgREST fixtures for testing the built app on loopback.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { generateKeyPairSync, sign } from "node:crypto";
+import {
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  sign,
+  timingSafeEqual,
+} from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { analyzeCompatibility } from "@rollbackiq/scanner-core/compatibility";
+import { z } from "zod";
 
 const owner = "00000000-0000-4000-8000-000000000001";
-const newcomer = "00000000-0000-4000-8000-000000000002";
 const organization = "00000000-0000-4000-8000-000000000003";
 const otherOrganization = "00000000-0000-4000-8000-000000000004";
-const newOrganization = "00000000-0000-4000-8000-000000000005";
 const repository = "00000000-0000-4000-8000-000000000006";
 const scan = "00000000-0000-4000-8000-000000000007";
 const password = "FixtureOnly123";
@@ -36,10 +42,16 @@ const jwk = {
   alg: "RS256",
   use: "sig",
 };
-const users = new Map([
-  [owner, user(owner, "owner@example.test")],
-  [newcomer, user(newcomer, "new@example.test")],
-]);
+const credentials = z.object({
+  email: z
+    .string()
+    .trim()
+    .max(254)
+    .pipe(z.email())
+    .transform((email) => email.toLowerCase()),
+  password: z.string().min(8).max(256),
+});
+const users = new Map([[owner, user(owner, "owner@example.test", password)]]);
 const organizations = [
   { id: organization, name: "Acme Engineering", user: owner },
   { id: otherOrganization, name: "Sandbox Team", user: owner },
@@ -99,15 +111,20 @@ const limits = { organizations: 0, configuration: 0 };
 const sessions = new Map();
 let authOrigin;
 
-function user(id, email) {
+function user(id, email, password) {
+  const salt = randomBytes(16);
   return {
-    id,
-    email,
-    aud: "authenticated",
-    role: "authenticated",
-    is_anonymous: false,
-    app_metadata: {},
-    user_metadata: {},
+    passwordHash: scryptSync(password, salt, 32),
+    salt,
+    profile: {
+      id,
+      email,
+      aud: "authenticated",
+      role: "authenticated",
+      is_anonymous: false,
+      app_metadata: {},
+      user_metadata: {},
+    },
   };
 }
 
@@ -124,7 +141,7 @@ function session(id) {
       role: "authenticated",
       iat: now,
       exp: now + 3600,
-      session_id: id,
+      session_id: randomUUID(),
       aal: "aal1",
       is_anonymous: false,
     }),
@@ -138,7 +155,7 @@ function session(id) {
     token_type: "bearer",
     expires_in: 3600,
     expires_at: now + 3600,
-    user: users.get(id),
+    user: users.get(id).profile,
   };
 }
 
@@ -167,32 +184,45 @@ const persistence = createServer(async (request, response) => {
     }
     if (url.pathname === "/auth/v1/.well-known/jwks.json") return reply(200, { keys: [jwk] });
     if (url.pathname === "/auth/v1/token" && url.searchParams.get("grant_type") === "password") {
-      const input = await body();
-      const account = [...users.values()].find(({ email }) => email === input.email);
-      return account && input.password === password
-        ? reply(200, session(account.id))
+      const input = credentials.safeParse(await body());
+      const account =
+        input.success &&
+        [...users.values()].find(({ profile }) => profile.email === input.data.email);
+      return input.success &&
+        account &&
+        timingSafeEqual(account.passwordHash, scryptSync(input.data.password, account.salt, 32))
+        ? reply(200, session(account.profile.id))
         : reply(400, { code: "invalid_credentials", message: "Invalid login credentials" });
     }
     if (url.pathname === "/auth/v1/signup") {
-      const input = await body();
-      return input.email === users.get(newcomer).email && input.password === password
-        ? reply(200, session(newcomer))
-        : reply(422, { code: "signup_disabled", message: "Fixture signup unavailable" });
+      const input = credentials.safeParse(await body());
+      if (!input.success)
+        return reply(422, { code: "validation_failed", message: "Invalid signup credentials" });
+      const { email, password } = input.data;
+      if ([...users.values()].some(({ profile }) => profile.email === email))
+        return reply(422, {
+          code: "user_already_exists",
+          message: "Preview account already exists",
+        });
+      if (users.size >= 100) return reply(503, { message: "Preview account limit reached" });
+      const id = randomUUID();
+      users.set(id, user(id, email, password));
+      return reply(200, session(id));
     }
     if (url.pathname === "/fixture-counts") return reply(200, limits);
     if (!identity && !service) return reply(401, { message: "Fixture session rejected" });
-    if (url.pathname === "/auth/v1/user") return reply(200, users.get(identity));
+    if (url.pathname === "/auth/v1/user" && identity)
+      return reply(200, users.get(identity).profile);
     if (url.pathname === "/auth/v1/logout") {
       sessions.delete(request.headers.authorization);
       return reply(200, {});
     }
-    if (url.pathname === "/rest/v1/rpc/rollbackiq_create_organization" && identity === newcomer) {
+    if (url.pathname === "/rest/v1/rpc/rollbackiq_create_organization" && identity) {
       const { p_name } = await body();
-      if (limits.organizations === 0) {
-        limits.organizations++;
-        organizations.push({ id: newOrganization, name: p_name, user: newcomer });
-      }
-      return reply(200, newOrganization);
+      const id = randomUUID();
+      limits.organizations++;
+      organizations.push({ id, name: p_name, user: identity });
+      return reply(200, id);
     }
     if (url.pathname === "/rest/v1/rpc/rollbackiq_github_service" && service) {
       const { p_action, p_data } = await body();
@@ -278,6 +308,7 @@ const app = spawn(
       NODE_ENV: "production",
       NEXT_TELEMETRY_DISABLED: "1",
       ROLLBACKIQ_RELEASE: process.env.ROLLBACKIQ_RELEASE,
+      ROLLBACKIQ_LOCAL_PREVIEW: "1",
       APP_URL: appOrigin,
       NEXT_PUBLIC_SUPABASE_URL: authOrigin,
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "fixture-publishable",
@@ -294,7 +325,7 @@ const app = spawn(
   },
 );
 console.info(
-  `Onboarding fixture ${appOrigin}. Disposable accounts: owner@example.test and new@example.test (${password}).`,
+  `Onboarding fixture ${appOrigin}. Sample workspace: owner@example.test (${password}). Signup creates temporary accounts in memory.`,
 );
 console.info(`Fixture mutation counts: ${authOrigin}/fixture-counts`);
 const stop = () => app.kill();

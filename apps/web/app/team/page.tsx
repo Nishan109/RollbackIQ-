@@ -5,10 +5,13 @@ import { signOut } from "@/app/auth/actions";
 import { Brand } from "@/components/brand";
 import { NavigationStatus } from "@/components/navigation-status";
 import { SubmitButton } from "@/components/submit-button";
+import { githubReady } from "@/lib/github/config";
 import { supabaseSettings } from "@/lib/supabase/config";
 import { requireIdentity } from "@/lib/supabase/server";
 import { canManageGitHub, jobStatus, setupProgress, verdictLabel } from "@/lib/team-experience";
 import { addRepository, createOrganization, setMember } from "./actions";
+import { ConnectButton } from "./github/connect-button";
+import { ConnectionRefresh } from "./github/connection-refresh";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -147,7 +150,7 @@ export default async function TeamPage({
   const nextStep = !org
     ? "Create an organization to keep your repositories and reports together."
     : !progress.github
-      ? "Install the GitHub App and grant access to the repositories you want to scan."
+      ? "Authorize GitHub in a new tab, then select and save repositories to connect this workspace."
       : !progress.repository
         ? "Select a repository that you administer in GitHub."
         : !progress.configuration
@@ -158,6 +161,7 @@ export default async function TeamPage({
 
   return (
     <main className="container team-layout product-team" id="main-content">
+      {org && <ConnectionRefresh organization={org.id} />}
       <header className="team-header">
         <Brand />
         <nav className="product-nav" aria-label="Workspace navigation">
@@ -165,7 +169,7 @@ export default async function TeamPage({
             Help
           </Link>
           <Link className="text-link" href="/workspace">
-            Local scanner
+            Dashboard
           </Link>
           <form action={signOut}>
             <SubmitButton className="button secondary compact" pendingLabel="Signing out…">
@@ -260,11 +264,13 @@ export default async function TeamPage({
                     ? "Ask an organization owner or admin to finish GitHub setup."
                     : nextStep}
               </p>
-              {canManage && (
-                <Link className="button primary compact" href={githubHref}>
-                  <Github size={17} aria-hidden="true" />{" "}
-                  {progress.github ? "GitHub settings" : "Connect GitHub"}
-                </Link>
+              {canManage && org && (
+                <div className="team-heading">
+                  {!progress.github && githubReady() && <ConnectButton organization={org.id} />}
+                  <Link className="button secondary compact" href={githubHref}>
+                    <Github size={17} aria-hidden="true" /> GitHub settings
+                  </Link>
+                </div>
               )}
               {!organizations?.length && <OrganizationForm />}
             </section>

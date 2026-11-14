@@ -16,19 +16,21 @@ export async function beginAuthorization(
   actor: string,
   organization: string,
   installation?: number,
+  phase: FlowCookie["phase"] = installation ? "oauth" : "install",
 ) {
   const cookie: FlowCookie = {
     state: randomSecret(),
     verifier: randomSecret(),
-    phase: installation ? "oauth" : "install",
+    phase,
     installation,
   };
   await store("begin", { actor, organization, hash: stateHash(cookie.state), phase: cookie.phase });
-  const url = installation
-    ? new URL("https://github.com/login/oauth/authorize")
-    : new URL(`https://github.com/apps/${provider.settings.slug}/installations/new`);
+  const url =
+    phase === "oauth"
+      ? new URL("https://github.com/login/oauth/authorize")
+      : new URL(`https://github.com/apps/${provider.settings.slug}/installations/new`);
   url.searchParams.set("state", cookie.state);
-  if (installation) {
+  if (phase === "oauth") {
     url.searchParams.set("client_id", provider.settings.clientId);
     url.searchParams.set("redirect_uri", `${provider.settings.origin}/api/github/callback`);
     url.searchParams.set("code_challenge", pkceChallenge(cookie.verifier));

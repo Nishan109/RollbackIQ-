@@ -15,6 +15,8 @@ export const metadata: Metadata = {
 const notices: Record<string, string> = {
   invalid: "Check the email and password fields. Passwords must have at least eight characters.",
   credentials: "Sign-in failed. Verify your email and password and try again.",
+  "preview-account-exists":
+    "That test email is already in use. Sign in or choose a different test email.",
   unavailable: "The request could not complete. Check your connection and try again shortly.",
   "slow-down": "Too many requests. Wait a moment before trying again.",
   verify:
@@ -43,6 +45,7 @@ export default async function AuthPage({
           ? "Choose a new password"
           : "Sign in";
   const configured = supabaseSettings();
+  const localPreview = process.env.ROLLBACKIQ_LOCAL_PREVIEW === "1";
   if (configured && mode === "reset" && !(await supabaseIdentity())) redirect("/auth?notice=link");
   const notice =
     params.notice && Object.hasOwn(notices, params.notice) ? notices[params.notice] : null;
@@ -57,6 +60,12 @@ export default async function AuthPage({
       </header>
       <section className="dashboard-card auth-card">
         <h1>{title}</h1>
+        {localPreview && (mode === "signup" || mode === "login") && (
+          <p className="auth-notice">
+            Local preview. Use a test email and password. New accounts last until the preview
+            restarts, and no verification email is sent.
+          </p>
+        )}
         {configured && (
           <p>
             {
@@ -122,8 +131,9 @@ export default async function AuthPage({
               )}
               {mode === "signup" && (
                 <p>
-                  Use at least eight characters. If email verification is required, check your inbox
-                  before signing in.
+                  Use at least eight characters.
+                  {!localPreview &&
+                    " If email verification is required, check your inbox before signing in."}
                 </p>
               )}
               {mode === "reset" && (

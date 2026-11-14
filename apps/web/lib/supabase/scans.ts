@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { CompatibilityReport } from "@rollbackiq/scanner-core/compatibility/contracts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { compatibilityReportSchema } from "../compatibility-report";
+import type { SavedScanSummary } from "../workspace-reports";
 import type { Database } from "./database";
 
 type Client = SupabaseClient<Database>;
@@ -58,4 +60,38 @@ export async function saveReport(
     p_idempotency_key: idempotency,
     p_report: report,
   });
+}
+
+// The session-bound client applies organization RLS to both lookups. Only the
+// history metadata is returned here; report bodies load through /api/scans/[id].
+export async function workspaceScans(client: Client, selectedId?: string) {
+  const columns = "id,repository_id,created_at,status,finding_count,previous_sha,proposed_sha";
+  const { data, error } = await client
+    .from("scans")
+    .select(columns)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(26);
+  const unavailable = { scans: [] as SavedScanSummary[], unavailable: true, more: false };
+  if (error || !data) return unavailable;
+  const rows = data.slice(0, 25);
+  if (selectedId && !rows.some(({ id }) => id === selectedId)) {
+    const selected = await client.from("scans").select(columns).eq("id", selectedId).maybeSingle();
+    if (selected.error) return unavailable;
+    if (selected.data) rows.unshift(selected.data);
+  }
+  if (!rows.length) return { scans: [], unavailable: false, more: false };
+  const repositories = await client
+    .from("repositories")
+    .select("id,name")
+    .in("id", [...new Set(rows.map(({ repository_id }) => repository_id))]);
+  if (repositories.error || !repositories.data) return unavailable;
+  const names = new Map(repositories.data.map(({ id, name }) => [id, name]));
+  const scans: SavedScanSummary[] = rows.flatMap((row) => {
+    const name = names.get(row.repository_id);
+    if (!name) return [];
+    const status = compatibilityReportSchema.shape.status.safeParse(row.status);
+    return [{ ...row, repository_name: name, status: status.success ? status.data : "unknown" }];
+  });
+  return { scans, unavailable: false, more: data.length > 25 };
 }

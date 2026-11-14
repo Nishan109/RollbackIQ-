@@ -92,8 +92,8 @@ The worker loads `apps/web/.env.local`. `pnpm github:worker --once` claims at mo
 
 1. Open `/team`, sign in, and create an organization if necessary.
 2. As its owner/admin, open **Manage GitHub connection**.
-3. Click **Connect GitHub** and install the App on the desired GitHub account. Choose a test repository.
-4. Complete GitHub authorization. RollbackIQ verifies the App installation and your administrative access. Merely receiving an `installation_id` is insufficient.
+3. Click **Connect GitHub** to authorize an existing installation in a new tab. For a first installation, use **Install GitHub App** in GitHub settings and select a test repository on GitHub.
+4. Complete GitHub authorization. If you can access multiple installations, choose **Already installed on GitHub?** and enter the ID from the installation settings URL. An installation can belong to one RollbackIQ organization at a time.
 5. Select repositories in RollbackIQ and click **Connect selected repositories** within five minutes. Expired selection requires reconnecting.
 6. An existing unlinked manual record with the exact same owner/repository name in this organization is reused; historical reports are retained.
 7. Configure migrations (for example `migrations`), source directories (`src`), optional Prisma/baseline paths, and an explicit previous release tag/branch/SHA (`v1.0.0`).
