@@ -13,6 +13,8 @@ import {
   Github,
   GitPullRequest,
   Menu,
+  Pause,
+  Play,
   ScanLine,
   ShieldAlert,
   TriangleAlert,
@@ -96,6 +98,23 @@ export function LandingNavigation() {
         </div>
       </div>
     </header>
+  );
+}
+
+export function HeroMotionToggle() {
+  const [paused, setPaused] = useState(false);
+  return (
+    <button
+      type="button"
+      className={styles.heroMotionToggle}
+      aria-label="Pause hero animation"
+      aria-pressed={paused}
+      aria-controls="landing-hero"
+      title={paused ? "Resume hero animation" : "Pause hero animation"}
+      onClick={() => setPaused((wasPaused) => !wasPaused)}
+    >
+      {paused ? <Play size={13} aria-hidden="true" /> : <Pause size={13} aria-hidden="true" />}
+    </button>
   );
 }
 

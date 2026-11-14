@@ -24,7 +24,13 @@ import { getCompatibilityDemo } from "@/lib/compatibility-demo";
 import { getDemo } from "@/lib/demo";
 import { verdictLabel } from "@/lib/team-experience";
 import styles from "./landing.module.css";
-import { LandingNavigation, ProductPreview } from "./landing-experience";
+import { HeroMotionToggle, LandingNavigation, ProductPreview } from "./landing-experience";
+
+const heroHeadlines = [
+  ["Ship forward.", "Think backward."],
+  ["Change schema.", "Check old code."],
+  ["Spot the risk.", "Before you merge."],
+];
 
 const workflow = [
   {
@@ -90,7 +96,7 @@ export default async function Home() {
     <div className={styles.page}>
       <LandingNavigation />
       <main id="main-content">
-        <section className={styles.hero} aria-labelledby="hero-heading">
+        <section className={styles.hero} id="landing-hero" aria-labelledby="hero-heading">
           <div className={styles.heroTexture} aria-hidden="true" />
           <div className={`${styles.container} ${styles.heroGrid}`}>
             <div className={styles.heroCopy}>
@@ -100,10 +106,22 @@ export default async function Home() {
                 <ChevronRight size={14} aria-hidden="true" />
               </a>
               <h1 id="hero-heading">
-                Ship forward.
-                <br />
-                <span>Think backward.</span>
+                {heroHeadlines.map(([firstLine, secondLine], index) => (
+                  <span
+                    className={styles.headlineFrame}
+                    aria-hidden={index > 0 ? true : undefined}
+                    key={firstLine}
+                  >
+                    <span className={styles.headlineForward}>{firstLine}</span>{" "}
+                    <span className={styles.headlineBackward}>{secondLine}</span>
+                  </span>
+                ))}
               </h1>
+              <div className={styles.headlineProgress} aria-hidden="true">
+                {heroHeadlines.map(([firstLine]) => (
+                  <span className={styles.headlineProgressSegment} key={firstLine} />
+                ))}
+              </div>
               <p className={styles.heroDescription}>
                 Your next migration shouldn’t break your last release. Find the PostgreSQL changes
                 that could, with evidence from the code you already ship.
@@ -120,15 +138,21 @@ export default async function Home() {
                 <Check size={14} aria-hidden="true" /> Static analysis. No database connection
                 needed.
               </p>
-              <a className={styles.heroProductLink} href="#product">
-                See what’s inside <ArrowDown size={14} aria-hidden="true" />
-              </a>
+              <div className={styles.heroLinks}>
+                <a className={styles.heroProductLink} href="#product">
+                  See what’s inside <ArrowDown size={14} aria-hidden="true" />
+                </a>
+                <HeroMotionToggle />
+              </div>
             </div>
             <figure
               className={styles.heroVisual}
               aria-label="Sample column removal and previous-release query"
             >
-              <div className={styles.visualGrid} aria-hidden="true" />
+              <div className={styles.visualGrid} aria-hidden="true">
+                <span className={styles.visualRail} />
+                <span className={styles.visualRail} />
+              </div>
               <div className={styles.visualTopline}>
                 <span className={styles.smallLabel}>ONE CHANGE. TWO RELEASES.</span>
                 <span>Sample analysis</span>
