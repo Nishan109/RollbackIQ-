@@ -2,6 +2,7 @@ import "@fontsource-variable/geist";
 import "@fontsource-variable/jetbrains-mono";
 import type { Metadata } from "next";
 import "./globals.css";
+import "./product-ui.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_URL || "https://rollback-iq.vercel.app"),

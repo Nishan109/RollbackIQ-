@@ -1,9 +1,19 @@
-import { ArrowRight, Check, Circle, Github, GitPullRequest, Layers3 } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Circle,
+  FileCheck2,
+  FolderGit2,
+  Github,
+  GitPullRequest,
+  Layers3,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { signOut } from "@/app/auth/actions";
 import { Brand } from "@/components/brand";
 import { NavigationStatus } from "@/components/navigation-status";
+import { ProductHeader } from "@/components/product-header";
 import { SubmitButton } from "@/components/submit-button";
 import { githubReady } from "@/lib/github/config";
 import { supabaseSettings } from "@/lib/supabase/config";
@@ -162,29 +172,29 @@ export default async function TeamPage({
   return (
     <main className="container team-layout product-team" id="main-content">
       {org && <ConnectionRefresh organization={org.id} />}
-      <header className="team-header">
-        <Brand />
-        <nav className="product-nav" aria-label="Workspace navigation">
-          <Link className="text-link" href="/help">
-            Help
-          </Link>
-          <Link className="text-link" href="/workspace">
-            Dashboard
-          </Link>
+      <ProductHeader
+        active="team"
+        actions={
           <form action={signOut}>
             <SubmitButton className="button secondary compact" pendingLabel="Signing out…">
               Sign out
             </SubmitButton>
           </form>
-        </nav>
-      </header>
+        }
+      />
       <div className="workspace-intro">
         <div>
+          <span className="product-eyebrow">RELEASE CONTROL CENTER</span>
           <h1>Team workspace</h1>
           <p>Connect repositories and review PostgreSQL migration risks with your team.</p>
         </div>
         <p className="workspace-account">
-          Signed in as <strong>{user.email ?? user.id}</strong>
+          <span className="account-avatar" aria-hidden="true">
+            {(user.email ?? "U").slice(0, 1).toUpperCase()}
+          </span>
+          <span>
+            Signed in as <strong>{user.email ?? user.id}</strong>
+          </span>
         </p>
       </div>
       {notice && Object.hasOwn(notices, notice) && (
@@ -230,17 +240,70 @@ export default async function TeamPage({
               That organization is unavailable. Select an organization you can access.
             </p>
           )}
+          {org && (
+            <section className="team-metrics" aria-label="Workspace activity summary">
+              <article>
+                <span className="metric-icon violet">
+                  <FolderGit2 size={18} />
+                </span>
+                <div>
+                  <p>Repositories</p>
+                  <strong>
+                    {repositories?.error
+                      ? "—"
+                      : `${repositories?.data?.length ?? 0}${repositories?.data?.length === 200 ? "+" : ""}`}
+                  </strong>
+                  <small>Available in this workspace</small>
+                </div>
+              </article>
+              <article>
+                <span className="metric-icon blue">
+                  <FileCheck2 size={18} />
+                </span>
+                <div>
+                  <p>Recent saved reports</p>
+                  <strong>{scans?.error ? "—" : (scans?.data?.length ?? 0)}</strong>
+                  <small>Latest release evidence</small>
+                </div>
+              </article>
+              <article>
+                <span className="metric-icon mint">
+                  <GitPullRequest size={18} />
+                </span>
+                <div>
+                  <p>Recent scan jobs</p>
+                  <strong>{jobs?.error ? "—" : (jobs?.data?.length ?? 0)}</strong>
+                  <small>Latest pull request activity</small>
+                </div>
+              </article>
+            </section>
+          )}
           {(!organization || org || !organizations?.length) && (
             <section
               className="dashboard-card team-card setup-card"
               aria-labelledby="setup-heading"
             >
               <div className="team-heading">
-                <h2 id="setup-heading">Workspace setup{org ? ` · ${org.name}` : ""}</h2>
+                <div>
+                  <span className="product-eyebrow">GETTING STARTED</span>
+                  <h2 id="setup-heading">Workspace setup{org ? ` · ${org.name}` : ""}</h2>
+                </div>
                 <Link className="text-link" href="/help#getting-started">
                   Setup guide <ArrowRight size={15} aria-hidden="true" />
                 </Link>
               </div>
+              {!setupUnavailable && (
+                <div className="setup-progress">
+                  <progress
+                    max={steps.length}
+                    value={steps.filter(({ done }) => done).length}
+                    aria-label="Workspace setup completion"
+                  />
+                  <span>
+                    {steps.filter(({ done }) => done).length} of {steps.length} steps complete
+                  </span>
+                </div>
+              )}
               <ol className="setup-steps">
                 {steps.map(({ title, done }, index) => {
                   const state =
@@ -282,7 +345,9 @@ export default async function TeamPage({
         <>
           <section className="dashboard-card team-card workspace-repositories">
             <div className="team-heading">
-              <h2>Repositories</h2>
+              <h2>
+                <FolderGit2 size={18} aria-hidden="true" /> Repositories
+              </h2>
               {role && <span className="neutral-pill">{role}</span>}
             </div>
             {repositories?.error ? (
@@ -292,7 +357,14 @@ export default async function TeamPage({
                 {repositories.data.map(({ id, name }) => (
                   <li key={id}>
                     <Link className="text-link" href={`/team/repositories/${id}`} prefetch={false}>
-                      {name}
+                      <span className="repository-list-icon">
+                        <FolderGit2 size={20} aria-hidden="true" />
+                      </span>
+                      <span>
+                        {name}
+                        <small>View scans and release evidence</small>
+                      </span>
+                      <NavigationStatus />
                     </Link>
                     <span className="neutral-pill">
                       {setupUnavailable
@@ -315,7 +387,9 @@ export default async function TeamPage({
 
           <div className="workspace-activity">
             <section className="dashboard-card team-card">
-              <h2>Recent reports</h2>
+              <h2>
+                <FileCheck2 size={18} aria-hidden="true" /> Recent reports
+              </h2>
               {scans?.error ? (
                 <p role="alert">Saved reports are temporarily unavailable.</p>
               ) : scans?.data?.length ? (
@@ -332,8 +406,9 @@ export default async function TeamPage({
                           <time dateTime={scan.created_at}>
                             {date.format(new Date(scan.created_at))}
                           </time>
+                          <NavigationStatus />
                         </Link>
-                        <p>
+                        <p className="activity-verdict" data-verdict={scan.status}>
                           {verdictLabel(scan.status)} · {scan.finding_count}{" "}
                           {scan.finding_count === 1 ? "finding" : "findings"}
                         </p>
@@ -346,7 +421,9 @@ export default async function TeamPage({
               )}
             </section>
             <section className="dashboard-card team-card">
-              <h2>Recent pull request jobs</h2>
+              <h2>
+                <GitPullRequest size={18} aria-hidden="true" /> Recent pull request jobs
+              </h2>
               {jobs?.error ? (
                 <p role="alert">Job status is temporarily unavailable.</p>
               ) : jobs?.data?.length ? (
@@ -361,6 +438,7 @@ export default async function TeamPage({
                         >
                           <GitPullRequest size={15} aria-hidden="true" />{" "}
                           {repoNames.get(job.repository_id) ?? "Repository"} · PR #{job.pull_number}
+                          <NavigationStatus />
                         </Link>
                         <p>
                           {jobStatus(job.status, job.scan_id)} ·{" "}

@@ -82,7 +82,10 @@ export function CompatibilityPanel({
       {!migrationPath && (
         <div className="compatibility-overview">
           <CompatibilityBadge status={report.status} />
-          <span>{report.findings.length} compatibility findings</span>
+          <span>
+            {report.findings.length} compatibility{" "}
+            {report.findings.length === 1 ? "finding" : "findings"}
+          </span>
           <span>{report.coverage.gaps.length} coverage gaps</span>
           <span>{report.dependencies.previous.queries} previous-release queries</span>
         </div>

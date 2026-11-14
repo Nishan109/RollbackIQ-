@@ -1,10 +1,18 @@
-import { Download, GitPullRequest } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Download,
+  FileCheck2,
+  FolderGit2,
+  GitPullRequest,
+  Settings2,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Brand } from "@/components/brand";
 import { CompatibilityPanel } from "@/components/compatibility-panel";
 import { NavigationStatus } from "@/components/navigation-status";
+import { ProductHeader } from "@/components/product-header";
 import { SubmitButton } from "@/components/submit-button";
 import { compatibilityReportSchema } from "@/lib/compatibility-report";
 import { geminiSettings } from "@/lib/gemini";
@@ -88,24 +96,78 @@ export default async function RepositoryPage({
   const report = selected?.data ? compatibilityReportSchema.safeParse(selected.data.report) : null;
   const githubName = fullName.safeParse(githubRepository.data?.full_name);
   const githubUrl = githubName.success ? `https://github.com/${githubName.data}` : null;
+  const latest = !search.scan && !cursor ? history?.scans[0] : null;
+  const nameSeparator = repo.name.indexOf("/");
   return (
-    <main className="container team-layout product-team">
-      <header className="team-header">
-        <Brand />
-        <nav className="product-nav" aria-label="Workspace navigation">
-          <Link className="text-link" href={`/team?organization=${repo.organization_id}`}>
-            Team workspace
+    <main className="container team-layout product-team repository-page" id="main-content">
+      <ProductHeader
+        active="repository"
+        teamHref={`/team?organization=${repo.organization_id}`}
+        guideHref="/help#understanding-scans"
+      />
+      <div className="repository-hero">
+        <div>
+          <span className="product-eyebrow">
+            <FolderGit2 size={14} aria-hidden="true" /> REPOSITORY INTELLIGENCE
+          </span>
+          <h1>
+            {nameSeparator >= 0 ? (
+              <>
+                <span className="repository-owner">{repo.name.slice(0, nameSeparator + 1)}</span>
+                <wbr />
+                {repo.name.slice(nameSeparator + 1)}
+              </>
+            ) : (
+              repo.name
+            )}
+          </h1>
+          <p>Pull request scans, release evidence, and saved reports. All in one place.</p>
+        </div>
+        <div className="repository-actions">
+          {githubUrl && (
+            <a href={githubUrl} className="text-link">
+              View on GitHub <ArrowUpRight size={14} />
+            </a>
+          )}
+          {canManageGitHub(membership.data?.role) && (
+            <Link
+              className="button secondary compact"
+              href={`/team/github?organization=${repo.organization_id}`}
+            >
+              <Settings2 size={15} aria-hidden="true" /> Scan settings
+              <NavigationStatus />
+            </Link>
+          )}
+        </div>
+      </div>
+      {latest && (
+        <section
+          className="dashboard-card repository-latest"
+          aria-labelledby="latest-report-heading"
+        >
+          <span className="metric-icon violet">
+            <FileCheck2 size={20} aria-hidden="true" />
+          </span>
+          <div>
+            <span className="product-eyebrow">LATEST SAVED REPORT</span>
+            <h2 id="latest-report-heading">{verdictLabel(latest.status)}</h2>
+            <p>
+              <code>{latest.previous_sha.slice(0, 12)}</code> →{" "}
+              <code>{latest.proposed_sha.slice(0, 12)}</code> · {latest.finding_count}{" "}
+              {latest.finding_count === 1 ? "finding" : "findings"} ·{" "}
+              <time dateTime={latest.created_at}>
+                {new Date(latest.created_at).toLocaleDateString()}
+              </time>
+            </p>
+          </div>
+          <Link
+            className="button primary compact"
+            href={`/team/repositories/${repo.id}?scan=${latest.id}`}
+          >
+            Review latest report <ArrowRight size={15} aria-hidden="true" />
+            <NavigationStatus />
           </Link>
-          <Link className="text-link" href="/help#understanding-scans">
-            Report guide
-          </Link>
-        </nav>
-      </header>
-      <h1>{repo.name}</h1>
-      {canManageGitHub(membership.data?.role) && (
-        <Link className="text-link" href={`/team/github?organization=${repo.organization_id}`}>
-          GitHub connection and scan settings
-        </Link>
+        </section>
       )}
       {report?.success && selected?.data && (
         <div id="selected-report">
@@ -148,7 +210,9 @@ export default async function RepositoryPage({
         </div>
       )}
       <section className="dashboard-card team-card" id="scan-jobs">
-        <h2>GitHub scan jobs</h2>
+        <h2>
+          <GitPullRequest size={18} aria-hidden="true" /> GitHub scan jobs
+        </h2>
         {jobs.error ? (
           <p className="form-error" role="alert">
             GitHub job status is temporarily unavailable. Reload this page to retry.
@@ -216,7 +280,7 @@ export default async function RepositoryPage({
                       className="text-link"
                       href={`/team/repositories/${repo.id}?scan=${job.scan_id}`}
                     >
-                      Open saved report
+                      Open saved report <NavigationStatus />
                     </Link>
                   )}
                 </li>

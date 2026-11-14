@@ -27,6 +27,7 @@ import Link from "next/link";
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import { Brand } from "@/components/brand";
 import { CompatibilityBadge, CompatibilityPanel } from "@/components/compatibility-panel";
+import { ReportLoading } from "@/components/product-loading";
 import { CoverageBadge, SeverityBadge } from "@/components/report-ui";
 import { migrationSummary, parseCompatibilityReport } from "@/lib/compatibility-report";
 import type { DemoSample } from "@/lib/demo";
@@ -488,7 +489,7 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
             </button>
           </div>
         </header>
-        <main className="dashboard">
+        <main className="dashboard" id="main-content">
           <div className="screen-reader" role="status">
             {announcement}
           </div>
@@ -517,7 +518,7 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
               </button>
             </div>
           )}
-          <div className="dashboard-heading">
+          <div className="dashboard-heading" key={view}>
             <div>
               <div className="workspace-context">
                 <Database size={14} /> PostgreSQL <span />{" "}
@@ -557,12 +558,7 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
             )}
           </div>
 
-          {loadingSaved && (
-            <section className="dashboard-card empty" role="status">
-              <LoaderCircle size={22} className="spin" aria-hidden="true" />
-              <p>Loading your saved report…</p>
-            </section>
-          )}
+          {loadingSaved && <ReportLoading />}
           {!run && !loadingSaved && !savedFailure && !saved?.unavailable && (
             <section
               className="dashboard-card workspace-empty"
@@ -604,7 +600,8 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
                     <p>
                       <code>{run.compatibility.previous.ref}</code> →{" "}
                       <code>{run.compatibility.proposed.ref}</code> ·{" "}
-                      {run.compatibility.findings.length} compatibility findings
+                      {run.compatibility.findings.length} compatibility{" "}
+                      {run.compatibility.findings.length === 1 ? "finding" : "findings"}
                       {run.time
                         ? ` · ${new Date(run.time).toLocaleString()}`
                         : " · Synthetic demo release snapshots"}
@@ -637,7 +634,8 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
                     <div>
                       <h2>Findings by severity</h2>
                       <p>
-                        {report.findings.length} findings in {run.label}
+                        {report.findings.length}{" "}
+                        {report.findings.length === 1 ? "finding" : "findings"} in {run.label}
                       </p>
                     </div>
                     <ShieldAlert size={18} />
@@ -797,6 +795,7 @@ export function Workspace({ demo, saved }: { demo?: DemoData; saved?: SavedDashb
                       report={run.compatibility}
                       migrationPath={selectedFile.path}
                       imported={run.origin === "import"}
+                      saved={run.origin === "saved"}
                     />
                   )}
                 </div>

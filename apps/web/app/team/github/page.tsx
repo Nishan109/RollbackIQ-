@@ -3,6 +3,7 @@ import Link from "next/link";
 import { z } from "zod";
 import { Brand } from "@/components/brand";
 import { PostForm } from "@/components/post-form";
+import { ProductHeader } from "@/components/product-header";
 import { githubReady } from "@/lib/github/config";
 import { choices } from "@/lib/github/contracts";
 import { githubStore } from "@/lib/github/store";
@@ -177,17 +178,12 @@ export default async function GithubPage({
               : undefined
         }
       />
-      <header className="team-header">
-        <Brand />
-        <nav className="product-nav" aria-label="Workspace navigation">
-          <Link className="text-link" href={`/team?organization=${org}`}>
-            Team workspace
-          </Link>
-          <Link className="text-link" href="/help#getting-started">
-            Setup guide
-          </Link>
-        </nav>
-      </header>
+      <ProductHeader
+        active="github"
+        teamHref={`/team?organization=${org}`}
+        guideHref="/help#getting-started"
+      />
+      <span className="product-eyebrow">WORKSPACE INTEGRATIONS</span>
       <h1>GitHub connections</h1>
       <p>Authorize RollbackIQ in GitHub, then select the repositories you want to scan.</p>
       {query.notice && Object.hasOwn(messages, query.notice) && (

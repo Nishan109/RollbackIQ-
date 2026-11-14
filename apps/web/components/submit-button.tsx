@@ -13,6 +13,7 @@ export function SubmitButton({
   return (
     <>
       <button {...props} type="submit" disabled={pending || disabled} aria-busy={pending}>
+        {pending && <span className="navigation-spinner" aria-hidden="true" />}
         {pending ? pendingLabel : children}
       </button>
       <span className="screen-reader" role="status">
